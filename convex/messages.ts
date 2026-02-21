@@ -265,7 +265,7 @@ export const getThreadComments = query({
     const sortReplies = (comments: any[]) => {
       comments.forEach((comment) => {
         if (comment.replies && comment.replies.length > 0) {
-          comment.replies.sort((a, b) => a._creationTime - b._creationTime);
+          comment.replies.sort((a: any, b: any) => a._creationTime - b._creationTime);
           sortReplies(comment.replies);
         }
       });
@@ -570,6 +570,21 @@ export const deleteThread = mutation({
     // Verify the user owns this thread using userId
     if (thread.userId !== user._id) {
       throw new Error('Not authorized to delete this thread');
+    }
+    
+    // Check if this is a reply (has parent reference)
+    const parentId = thread.postId || thread.threadId || thread.parentId;
+    
+    // If this is a reply, decrement the parent's comment count
+    if (parentId) {
+      const parent = await ctx.db.get(parentId);
+      if (parent) {
+        // Ensure commentCount never goes below 0
+        const newCommentCount = Math.max(0, (parent.commentCount || 1) - 1);
+        await ctx.db.patch(parentId, {
+          commentCount: newCommentCount,
+        });
+      }
     }
     
     await ctx.db.delete(args.threadId);

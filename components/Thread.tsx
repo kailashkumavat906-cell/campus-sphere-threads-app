@@ -28,7 +28,10 @@ type ThreadProps = {
 };
 
 const Thread = ({ thread, showMenu = false, onDelete }: ThreadProps) => {
-    const { content, mediaFiles, likeCount, commentCount, retweetCount, creator, isLiked: initialIsLiked, isSaved: initialIsSaved, isFollowing: initialIsFollowing } = thread;
+    const { content, mediaFiles, likeCount, commentCount, retweetCount, creator, isLiked: initialIsLiked, isSaved: initialIsSaved, isFollowing: initialIsFollowing, postId, threadId, parentId } = thread;
+    
+    // Check if this is a reply (has parent reference)
+    const isReply = !!(postId || threadId || parentId);
     const toggleLike = useMutation(api.messages.toggleLike);
     const toggleSavePost = useMutation(api.messages.toggleSavePost);
     const voteOnPoll = useMutation(api.messages.voteOnPoll);
@@ -259,7 +262,7 @@ const Thread = ({ thread, showMenu = false, onDelete }: ThreadProps) => {
                                 style={styles.moreButton}
                                 onPress={() => {
                                     Alert.alert(
-                                        'Delete this thread?',
+                                        isReply ? 'Delete this reply?' : 'Delete this thread?',
                                         'This action cannot be undone.',
                                         [
                                             { text: 'Cancel', style: 'cancel' },
