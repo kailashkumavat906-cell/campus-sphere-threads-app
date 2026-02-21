@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "campussphere-auth",
+    "name": "CampusSphere",
     "slug": "campussphere-auth",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -25,20 +25,28 @@
       "output": "static",
       "favicon": "./assets/images/favicon.png"
     },
+    "splash": {
+      "image": "./assets/images/icon.png",
+      "imageWidth": 120,
+      "resizeMode": "contain",
+      "backgroundColor": "#FFFFFF"
+    },
     "plugins": [
       "expo-router",
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/splash-icon.png",
-          "imageWidth": 200,
+          "image": "./assets/images/icon.png",
+          "imageWidth": 120,
           "resizeMode": "contain",
-          "backgroundColor": "#ffffff",
+          "backgroundColor": "#FFFFFF",
           "dark": {
-            "backgroundColor": "#000000"
+            "backgroundColor": "#0D0D0D",
+            "image": "./assets/images/icon.png"
           }
         }
-      ]
+      ],
+      "expo-secure-store"
     ],
     "experiments": {
       "typedRoutes": true,
