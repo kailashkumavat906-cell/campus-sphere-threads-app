@@ -34,6 +34,7 @@ export const createUser = internalMutation({
       location: undefined,
       followersCount: 0,
       pushToken: undefined,
+      isPrivate: false,
     });
 
     return userId;

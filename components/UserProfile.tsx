@@ -62,9 +62,16 @@ const UserProfile = ({ userId }: UserProfileProps) => {
     profile?.clerkId ? { clerkId: profile.clerkId } : 'skip'
   );
   
+  // Use live follow counts from getFollowCounts query (NOT stored profile.followersCount)
+  const followCounts = useQuery(
+    api.users.getFollowCounts,
+    profile?.clerkId ? { clerkId: profile.clerkId } : 'skip'
+  );
+  
   const isFollowing = followStatus?.isFollowing ?? false;
-  const followersCount = followStatus?.followersCount ?? 0;
-  const followingCount = followStatus?.followingCount ?? 0;
+  // Use live counts from query - NOT profile.followersCount
+  const followersCount = followCounts?.followersCount ?? 0;
+  const followingCount = followCounts?.followingCount ?? 0;
   
   // Query for follow request status (for private accounts)
   const followRequestStatus = useQuery(
@@ -184,7 +191,7 @@ const UserProfile = ({ userId }: UserProfileProps) => {
           style={[styles.countButton, { backgroundColor: colors.secondary }]}
         >
           <Text style={[styles.countButtonNumber, { color: colors.text }]}>
-            {profile.followersCount}
+            {followersCount}
           </Text>
           <Text style={[styles.countButtonLabel, { color: colors.icon }]}>
             Followers

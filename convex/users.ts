@@ -44,6 +44,14 @@ export const searchUsers = query({
     // Get all users and filter manually (Convex doesn't support full-text search across multiple fields)
     const allUsers = await ctx.db.query('users').collect();
     
+    // Get all follows to calculate live counts
+    const allFollows = await ctx.db.query('follows').collect();
+
+    // Calculate live followers count for each user
+    const getLiveFollowersCount = (clerkId: string) => {
+      return allFollows.filter(f => f.followingId === clerkId).length;
+    };
+    
     // Filter users matching the search text
     const matchingUsers = allUsers
       .filter((user) => {
@@ -71,6 +79,8 @@ export const searchUsers = query({
         last_name: user.last_name,
         username: user.username,
         imageUrl: user.imageUrl,
+        // Use live followers count from follows table
+        followersCount: getLiveFollowersCount(user.clerkId),
       }));
 
     return matchingUsers;
@@ -88,6 +98,14 @@ export const getRecommendedUsers = query({
     // Get all users
     const allUsers = await ctx.db.query('users').collect();
 
+    // Get all follows to calculate live counts
+    const allFollows = await ctx.db.query('follows').collect();
+
+    // Calculate live followers count for each user
+    const getLiveFollowersCount = (clerkId: string) => {
+      return allFollows.filter(f => f.followingId === clerkId).length;
+    };
+
     // Filter and sort users
     const recommendedUsers = allUsers
       .filter((user) => {
@@ -98,8 +116,8 @@ export const getRecommendedUsers = query({
         return true;
       })
       .sort((a, b) => {
-        // Sort by followersCount descending
-        return (b.followersCount || 0) - (a.followersCount || 0);
+        // Sort by live followersCount descending
+        return (getLiveFollowersCount(b.clerkId) || 0) - (getLiveFollowersCount(a.clerkId) || 0);
       })
       .slice(0, 20) // Limit to 20 users
       .map((user) => ({
@@ -109,7 +127,8 @@ export const getRecommendedUsers = query({
         last_name: user.last_name,
         username: user.username,
         imageUrl: user.imageUrl,
-        followersCount: user.followersCount,
+        // Use live followers count from follows table
+        followersCount: getLiveFollowersCount(user.clerkId),
       }));
 
     return recommendedUsers;
@@ -207,6 +226,31 @@ export const getFollowingCount = query({
   },
 });
 
+// Get both followers and following counts for a user (by Clerk ID)
+export const getFollowCounts = query({
+  args: {
+    clerkId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    // Followers = people following this user (where followingId == userId)
+    const followers = await ctx.db
+      .query('follows')
+      .withIndex('byFollowing', (q) => q.eq('followingId', args.clerkId))
+      .collect();
+    
+    // Following = people this user follows (where followerId == userId)
+    const following = await ctx.db
+      .query('follows')
+      .withIndex('byFollower', (q) => q.eq('followerId', args.clerkId))
+      .collect();
+    
+    return {
+      followersCount: followers.length,
+      followingCount: following.length,
+    };
+  },
+});
+
 // Follow a user (by Clerk ID)
 export const followUser = mutation({
   args: {
@@ -297,6 +341,14 @@ export const getFollowers = query({
       .withIndex('byFollowing', (q) => q.eq('followingId', args.clerkId))
       .collect();
 
+    // Get ALL follows to calculate live counts
+    const allFollows = await ctx.db.query('follows').collect();
+
+    // Calculate live followers count for a user
+    const getLiveFollowersCount = (targetClerkId: string) => {
+      return allFollows.filter(f => f.followingId === targetClerkId).length;
+    };
+
     // Get user details for each follower by Clerk ID
     const followers = await Promise.all(
       follows.map(async (follow) => {
@@ -312,7 +364,8 @@ export const getFollowers = query({
           last_name: user.last_name,
           username: user.username,
           imageUrl: user.imageUrl,
-          followersCount: user.followersCount,
+          // Use live followers count from follows table
+          followersCount: getLiveFollowersCount(user.clerkId),
         };
       })
     );
@@ -333,6 +386,14 @@ export const getFollowing = query({
       .withIndex('byFollower', (q) => q.eq('followerId', args.clerkId))
       .collect();
 
+    // Get ALL follows to calculate live counts
+    const allFollows = await ctx.db.query('follows').collect();
+
+    // Calculate live followers count for a user
+    const getLiveFollowersCount = (targetClerkId: string) => {
+      return allFollows.filter(f => f.followingId === targetClerkId).length;
+    };
+
     // Get user details for each following by Clerk ID
     const following = await Promise.all(
       follows.map(async (follow) => {
@@ -348,7 +409,8 @@ export const getFollowing = query({
           last_name: user.last_name,
           username: user.username,
           imageUrl: user.imageUrl,
-          followersCount: user.followersCount,
+          // Use live followers count from follows table
+          followersCount: getLiveFollowersCount(user.clerkId),
         };
       })
     );
@@ -496,6 +558,14 @@ export const syncUser = mutation({
     last_name: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    // Validate required fields
+    if (!args.clerkId) {
+      throw new Error('clerkId is required');
+    }
+    if (!args.email) {
+      throw new Error('email is required');
+    }
+    
     // Check if user exists
     const existingUser = await ctx.db
       .query('users')
@@ -543,6 +613,7 @@ export const syncUser = mutation({
       location: undefined,
       followersCount: 0,
       pushToken: undefined,
+      isPrivate: false,
     });
 
     return userId;
