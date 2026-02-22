@@ -245,8 +245,15 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ isReply, threadId, draf
         Alert.alert('Discard thread?', '', [
             {
                 text: 'Discard',
-                onPress: () => router.dismiss(),
                 style: 'destructive',
+                onPress: () => {
+                    // Safe navigation for discard
+                    if (router.canGoBack()) {
+                        router.back();
+                    } else {
+                        router.replace('/(auth)/(tabs)/feed');
+                    }
+                },
             },
             {
                 text: 'Save Draft',
@@ -286,8 +293,13 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ isReply, threadId, draf
             });
             
             Alert.alert('Draft Saved', 'Your post has been saved as a draft.');
-            setShowMenu(false);
-            router.dismiss();
+            
+            // Safe navigation - check if we can go back first
+            if (router.canGoBack()) {
+                router.back();
+            } else {
+                router.replace('/(auth)/(tabs)/feed');
+            }
         } catch (error) {
             console.error('Error saving draft:', error);
             Alert.alert('Error', 'Failed to save draft. Please try again.');
@@ -312,7 +324,12 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ isReply, threadId, draf
                         setMediaFiles([]);
                         setPollData(null);
                         setShowMenu(false);
-                        router.dismiss();
+                        // Safe navigation
+                        if (router.canGoBack()) {
+                            router.back();
+                        } else {
+                            router.replace('/(auth)/(tabs)/feed');
+                        }
                     },
                 },
             ]
@@ -375,8 +392,12 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ isReply, threadId, draf
             setMediaFiles([]);
             setPollData(null);
             
-            if (typeof router.dismiss === 'function') {
-                router.dismiss();
+            // Safe navigation - check if we can go back first
+            if (router.canGoBack()) {
+                router.back();
+            } else {
+                // If we can't go back, try to navigate to feed
+                router.replace('/(auth)/(tabs)/feed');
             }
         } catch (error) {
             console.error('Error posting thread:', error);

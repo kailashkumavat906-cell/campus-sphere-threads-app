@@ -60,6 +60,7 @@ const Page = () => {
 
     // Mutation for follow/unfollow
     const followUser = useMutation(api.users.followUser);
+    const unfollowUser = useMutation(api.users.unfollowUser);
 
     // Determine what to show
     const isSearching = searchText.length > 0;
@@ -68,13 +69,13 @@ const Page = () => {
     const showEmptyState = !isLoading && users && users.length === 0;
     const showInitialState = !isSearching && recommendedUsers && recommendedUsers.length > 0;
 
-    const handleUserPress = useCallback((userId: string) => {
-        router.push(`/profile?userId=${userId}`);
+    const handleUserPress = useCallback((clerkId: string) => {
+        router.push(`/profile?clerkId=${clerkId}`);
     }, []);
 
-    const handleFollowPress = useCallback(async (userId: Id<'users'>) => {
+    const handleFollowPress = useCallback(async (clerkId: string) => {
         try {
-            await followUser({ userId });
+            await followUser({ userId: clerkId });
         } catch (error) {
             console.error('Error following user:', error);
         }
@@ -98,7 +99,7 @@ const Page = () => {
         return (
             <TouchableOpacity
                 style={[styles.userItem, { backgroundColor: colors.background }]}
-                onPress={() => handleUserPress(item._id)}
+                onPress={() => handleUserPress(item.clerkId)}
                 activeOpacity={0.7}
             >
                 <View style={styles.userContent}>
@@ -133,7 +134,7 @@ const Page = () => {
                 {!isSearching && (
                     <TouchableOpacity
                         style={[styles.followButton, { backgroundColor: colors.tint }]}
-                        onPress={() => handleFollowPress(item._id)}
+                        onPress={() => handleFollowPress(item.clerkId)}
                         activeOpacity={0.7}
                     >
                         <Text style={styles.followButtonText}>Follow</Text>

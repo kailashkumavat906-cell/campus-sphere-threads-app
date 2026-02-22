@@ -28,6 +28,84 @@ type FollowUser = {
     followersCount?: number;
 };
 
+// Individual FollowUserItem component - can use hooks properly
+function FollowUserItem({ item }: { item: FollowUser }) {
+    const colors = useThemeColors();
+    const { userId: currentUserId } = useAuth();
+    const followUser = useMutation(api.users.followUser);
+    const unfollowUser = useMutation(api.users.unfollowUser);
+    
+    // Use query-based follow status - this is at top level of component, valid
+    const followStatus = useQuery(
+        api.users.getFollowStatus,
+        item.clerkId ? { clerkId: item.clerkId } : 'skip'
+    );
+    
+    const isFollowing = followStatus?.isFollowing ?? false;
+    const isCurrentUser = currentUserId && item.clerkId === currentUserId;
+    
+    const fullName = [item.first_name, item.last_name].filter(Boolean).join(' ') || 'Unknown';
+    const username = item.username ? `@${item.username}` : '';
+
+    const handleFollow = async () => {
+        if (isCurrentUser) return;
+        try {
+            if (isFollowing) {
+                await unfollowUser({ userId: item.clerkId });
+            } else {
+                await followUser({ userId: item.clerkId });
+            }
+        } catch (error) {
+            console.error('Error following user:', error);
+        }
+    };
+
+    return (
+        <View style={[styles.userItem, { backgroundColor: colors.background }]}>
+            <View style={styles.userContent}>
+                <View style={styles.avatarContainer}>
+                    {item.imageUrl ? (
+                        <Image
+                            source={{ uri: item.imageUrl }}
+                            style={styles.avatar}
+                        />
+                    ) : (
+                        <View style={[styles.avatarPlaceholder, { backgroundColor: colors.tint }]}>
+                            <Text style={styles.avatarPlaceholderText}>
+                                {(item.first_name?.[0] || item.last_name?.[0] || '?').toUpperCase()}
+                            </Text>
+                        </View>
+                    )}
+                </View>
+                <View style={styles.userInfo}>
+                    <Text style={[styles.userName, { color: colors.text }]} numberOfLines={1}>
+                        {fullName}
+                    </Text>
+                    {username ? (
+                        <Text style={[styles.username, { color: colors.icon }]} numberOfLines={1}>
+                            {username}
+                        </Text>
+                    ) : null}
+                </View>
+                {!isCurrentUser && (
+                    <TouchableOpacity
+                        style={[
+                            styles.followButton, 
+                            isFollowing ? { backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border } : { backgroundColor: colors.primary }
+                        ]}
+                        onPress={handleFollow}
+                    >
+                        <Text style={[
+                            styles.followButtonText, 
+                            { color: isFollowing ? colors.text : colors.background }
+                        ]}>{isFollowing ? 'Following' : 'Follow'}</Text>
+                    </TouchableOpacity>
+                )}
+            </View>
+        </View>
+    );
+}
+
 // Debounce hook
 function useDebounce<T>(value: T, delay: number): T {
     const [debouncedValue, setDebouncedValue] = useState<T>(value);
@@ -46,24 +124,17 @@ function useDebounce<T>(value: T, delay: number): T {
 }
 
 export default function FollowersScreen() {
-    const { userId } = useLocalSearchParams<{ userId: string }>();
+    const { clerkId } = useLocalSearchParams<{ clerkId: string }>();
     const router = useRouter();
     const colors = useThemeColors();
     const insets = useSafeAreaInsets();
     const [searchText, setSearchText] = useState('');
     const debouncedSearchText = useDebounce(searchText, 300);
-    const { userId: currentUserId } = useAuth();
-    const followUser = useMutation(api.users.followUser);
-    
-    // Track following state locally for instant UI updates
-    const [followingUsers, setFollowingUsers] = useState<Record<string, boolean>>({});
-    
-    const targetUserId = userId as Id<'users'> | undefined;
     
     // Get followers list
     const followersData = useQuery(
         api.users.getFollowers,
-        targetUserId ? { userId: targetUserId } : 'skip'
+        clerkId ? { clerkId } : 'skip'
     );
     
     const filteredUsers = (followersData || []).filter(user => {
@@ -77,76 +148,10 @@ export default function FollowersScreen() {
 
     const isLoading = followersData === undefined;
 
-    // Check if current user is viewing their own profile
-    const isOwnProfile = currentUserId && targetUserId && currentUserId === targetUserId;
-
-    const renderUser = ({ item }: { item: FollowUser | null }) => {
+    // Use memoized render function that doesn't use hooks
+    const renderItem = ({ item }: { item: FollowUser | null }) => {
         if (!item) return null;
-        
-        const fullName = [item.first_name, item.last_name].filter(Boolean).join(' ') || 'Unknown';
-        const username = item.username ? `@${item.username}` : '';
-        const isCurrentUser = currentUserId && item.clerkId === currentUserId;
-
-        const handleFollow = async () => {
-            if (isCurrentUser) return;
-            try {
-                await followUser({ userId: item._id });
-                // Toggle local state instantly
-                setFollowingUsers(prev => ({
-                    ...prev,
-                    [item._id]: !prev[item._id]
-                }));
-            } catch (error) {
-                console.error('Error following user:', error);
-            }
-        };
-
-        const isFollowing = followingUsers[item._id] || false;
-
-        return (
-            <View style={[styles.userItem, { backgroundColor: colors.background }]}>
-                <View style={styles.userContent}>
-                    <View style={styles.avatarContainer}>
-                        {item.imageUrl ? (
-                            <Image
-                                source={{ uri: item.imageUrl }}
-                                style={styles.avatar}
-                            />
-                        ) : (
-                            <View style={[styles.avatarPlaceholder, { backgroundColor: colors.tint }]}>
-                                <Text style={styles.avatarPlaceholderText}>
-                                    {(item.first_name?.[0] || item.last_name?.[0] || '?').toUpperCase()}
-                                </Text>
-                            </View>
-                        )}
-                    </View>
-                    <View style={styles.userInfo}>
-                        <Text style={[styles.userName, { color: colors.text }]} numberOfLines={1}>
-                            {fullName}
-                        </Text>
-                        {username ? (
-                            <Text style={[styles.username, { color: colors.icon }]} numberOfLines={1}>
-                                {username}
-                            </Text>
-                        ) : null}
-                    </View>
-                    {!isCurrentUser && (
-                        <TouchableOpacity
-                            style={[
-                                styles.followButton, 
-                                isFollowing ? { backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border } : { backgroundColor: colors.primary }
-                            ]}
-                            onPress={handleFollow}
-                        >
-                            <Text style={[
-                                styles.followButtonText, 
-                                { color: isFollowing ? colors.text : colors.background }
-                            ]}>{isFollowing ? 'Following' : 'Follow'}</Text>
-                        </TouchableOpacity>
-                    )}
-                </View>
-            </View>
-        );
+        return <FollowUserItem item={item} />;
     };
 
     return (
@@ -192,7 +197,7 @@ export default function FollowersScreen() {
                 <FlatList
                     data={filteredUsers}
                     keyExtractor={(item) => item?._id || ''}
-                    renderItem={renderUser}
+                    renderItem={renderItem}
                     contentContainerStyle={styles.listContent}
                     showsVerticalScrollIndicator={false}
                     ListEmptyComponent={

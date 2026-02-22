@@ -25,9 +25,10 @@ type ThreadProps = {
     thread: ThreadWithPoll;
     showMenu?: boolean;
     onDelete?: (threadId: Id<'messages'>) => void;
+    onLikeToggle?: (isLiked: boolean, threadId: Id<'messages'>) => void;
 };
 
-const Thread = ({ thread, showMenu = false, onDelete }: ThreadProps) => {
+const Thread = ({ thread, showMenu = false, onDelete, onLikeToggle }: ThreadProps) => {
     const { content, mediaFiles, likeCount, commentCount, retweetCount, creator, isLiked: initialIsLiked, isSaved: initialIsSaved, isFollowing: initialIsFollowing, postId, threadId, parentId } = thread;
     
     // Check if this is a reply (has parent reference)
@@ -37,15 +38,24 @@ const Thread = ({ thread, showMenu = false, onDelete }: ThreadProps) => {
     const voteOnPoll = useMutation(api.messages.voteOnPoll);
     const deleteThread = useMutation(api.messages.deleteThread);
     const followUser = useMutation(api.users.followUser);
+    const unfollowUser = useMutation(api.users.unfollowUser);
     const router = useRouter();
     const { userId: currentUserId } = useAuth();
     
     const [isLiked, setIsLiked] = useState(initialIsLiked || false);
     const [localLikeCount, setLocalLikeCount] = useState(likeCount ?? 0);
     const [isSaved, setIsSaved] = useState(initialIsSaved || false);
-    const [isFollowing, setIsFollowing] = useState(initialIsFollowing || false);
     const [selectedImage, setSelectedImage] = useState<string | null>(null);
     const colors = useThemeColors();
+    
+    // Get follow status from query (single source of truth)
+    const followStatus = useQuery(
+        api.users.getFollowStatus,
+        creator?.clerkId ? { clerkId: creator.clerkId } : 'skip'
+    );
+    
+    // Use query result for follow state, fallback to initial
+    const isFollowing = followStatus?.isFollowing ?? initialIsFollowing ?? false;
 
     // Get poll votes data
     const pollVotesData = useQuery(
@@ -81,9 +91,14 @@ const Thread = ({ thread, showMenu = false, onDelete }: ThreadProps) => {
     };
 
     const handleLike = async () => {
-        await toggleLike({ messageId: thread._id });
-        setIsLiked(!isLiked);
-        setLocalLikeCount(prev => isLiked ? prev - 1 : prev + 1);
+        const result = await toggleLike({ messageId: thread._id });
+        const nowUnliked = result?.action === 'unlike';
+        setIsLiked(!nowUnliked);
+        setLocalLikeCount(prev => nowUnliked ? prev - 1 : prev + 1);
+        // Notify parent if callback provided
+        if (onLikeToggle) {
+            onLikeToggle(!nowUnliked, thread._id);
+        }
     };
 
     const handleComment = () => {
@@ -158,8 +173,12 @@ const Thread = ({ thread, showMenu = false, onDelete }: ThreadProps) => {
     const handleFollow = async () => {
         if (!creator?._id || isOwner) return;
         try {
-            await followUser({ userId: creator._id });
-            setIsFollowing(!isFollowing);
+            if (isFollowing) {
+                await unfollowUser({ userId: creator.clerkId });
+            } else {
+                await followUser({ userId: creator.clerkId });
+            }
+            // State will automatically update from query
         } catch (error) {
             console.error('Error following user:', error);
             Alert.alert('Error', 'Unable to follow user. Please try again.');
@@ -371,10 +390,10 @@ const Thread = ({ thread, showMenu = false, onDelete }: ThreadProps) => {
 
                         <TouchableOpacity style={styles.actionButton} onPress={handleSave}>
                             <View style={styles.actionIcon}>
-                                <Feather 
-                                    name={isSaved ? "bookmark" : "bookmark"} 
-                                    size={20} 
-                                    color={isSaved ? colors.tint : colors.icon} 
+                                <Ionicons 
+                                    name={isSaved ? "bookmark" : "bookmark-outline"} 
+                                    size={22} 
+                                    color={isSaved ? '#007AFF' : colors.icon} 
                                 />
                             </View>
                         </TouchableOpacity>

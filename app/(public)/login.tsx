@@ -377,7 +377,7 @@ export default function LoginScreen() {
 
           {/* Bottom Text - Navigate to Sign Up */}
           <View style={styles.bottomTextContainer}>
-            <Text style={[styles.bottomText, { color: colors.authTextSecondary }]}>Don't have an account? </Text>
+            <Text style={[styles.bottomText, { color: colors.authTextSecondary }]}>Don&apos;t have an account? </Text>
             <TouchableOpacity 
               onPress={handleNavigateToSignUp}
               accessibilityLabel="Navigate to sign up"

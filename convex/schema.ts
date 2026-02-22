@@ -13,6 +13,8 @@ export const User = {
   websiteUrl: v.optional(v.string()),
   followersCount: v.number(),
   pushToken: v.optional(v.string()),
+  // Privacy setting
+  isPrivate: v.optional(v.boolean()),
   // Education fields
   college: v.optional(v.string()),
   course: v.optional(v.string()),
@@ -62,9 +64,17 @@ export const SavedPost = {
 };
 
 export const Follow = {
-  followerId: v.id('users'),
-  followingId: v.id('users'),
+  followerId: v.string(), // Clerk user ID
+  followingId: v.string(), // Clerk user ID
   createdAt: v.number(),
+};
+
+export const FollowRequest = {
+  fromClerkId: v.string(), // Clerk user ID - who wants to follow
+  toClerkId: v.string(), // Clerk user ID - who receives the request
+  status: v.union(v.literal('pending'), v.literal('accepted'), v.literal('rejected')),
+  createdAt: v.number(),
+  updatedAt: v.number(),
 };
 
 export default defineSchema({
@@ -78,8 +88,9 @@ export default defineSchema({
     .index('byThreadAndPosted', ['threadId', 'isPosted'])
     .index('byScheduledFor', ['scheduledFor'])
     .index('byParentId', ['parentId']),
-  likes: defineTable(Like).index('byUserAndMessage', ['userId', 'messageId']),
+  likes: defineTable(Like).index('byUserAndMessage', ['userId', 'messageId']).index('byUser', ['userId']),
   pollVotes: defineTable(PollVote).index('byUserAndPoll', ['userId', 'pollId']),
   savedPosts: defineTable(SavedPost).index('byUserAndMessage', ['userId', 'messageId']).index('byUser', ['userId']),
-  follows: defineTable(Follow).index('byFollower', ['followerId']).index('byFollowing', ['followingId']).index('byFollowerAndFollowing', ['followerId', 'followingId']),
+  follows: defineTable(Follow).index('byFollowerAndFollowing', ['followerId', 'followingId']).index('byFollowing', ['followingId']).index('byFollower', ['followerId']),
+  followRequests: defineTable(FollowRequest).index('byToClerkId', ['toClerkId']).index('byFromClerkId', ['fromClerkId']).index('byToAndStatus', ['toClerkId', 'status']),
 });

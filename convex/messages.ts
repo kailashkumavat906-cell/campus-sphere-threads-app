@@ -22,6 +22,8 @@ export const addThread = mutation({
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUserOrThrow(ctx);
+    
+    console.log('[addThread] Received mediaFiles:', JSON.stringify(args.mediaFiles));
 
     // Check if this is a scheduled post
     const isScheduled = args.scheduledFor !== undefined && args.scheduledFor > Date.now();
@@ -45,6 +47,8 @@ export const addThread = mutation({
       pollMultipleChoice,
       parentId: args.parentId ?? undefined,
     });
+
+    console.log('[addThread] Inserted message with mediaFiles:', JSON.stringify(args.mediaFiles));
 
     // Update parent thread's comment count if this is a comment
     if (args.threadId && !isScheduled) {
@@ -82,12 +86,56 @@ export const getThreads = query({
     }
 
     // Filter posts in JS to handle isPosted field that might be undefined for old posts
+    // Also filter based on privacy settings
+    const postedThreads = threads.page.filter((thread) => {
+      // Show posts where isPosted is true OR undefined (for backward compatibility)
+      return thread.isPosted !== false;
+    });
+    
+    // Get creators for all threads and check privacy
+    const threadsWithPrivacy = await Promise.all(
+      postedThreads.map(async (thread) => {
+        const creator = await ctx.db.get(thread.userId);
+        
+        // If no creator, don't include
+        if (!creator) return { thread, include: false };
+        
+        // If account is not private, include
+        if (!creator.isPrivate) return { thread, include: true };
+        
+        // Account is private - check if current user is following
+        const isFollowing = await ctx.db
+          .query('follows')
+          .withIndex('byFollowerAndFollowing', (q) => 
+            q.eq('followerId', currentUser.clerkId).eq('followingId', creator.clerkId)
+          )
+          .first();
+        
+        return { thread, include: !!isFollowing };
+      })
+    );
+    
+    const filteredThreads = threadsWithPrivacy
+      .filter(t => t.include)
+      .map(t => t.thread);
+    
+    // Get saved status for all threads in one batch call
+    const threadIds = filteredThreads.map(t => t._id);
+    const savedStatus = await ctx.db
+      .query('savedPosts')
+      .filter((q) => 
+        q.and(
+          q.eq(q.field('userId'), currentUser._id),
+          q.or(...threadIds.map(id => q.eq(q.field('messageId'), id)))
+        )
+      )
+      .collect();
+    
+    // Create a Set of saved message IDs for O(1) lookup
+    const savedMessageIds = new Set(savedStatus.map(s => s.messageId));
+
     const threadsWithMedia = await Promise.all(
-      threads.page
-        .filter((thread) => {
-          // Show posts where isPosted is true OR undefined (for backward compatibility)
-          return thread.isPosted !== false;
-        })
+      filteredThreads
         .map(async (thread) => {
           console.log('[getThreads] Thread mediaFiles from DB:', JSON.stringify(thread.mediaFiles));
           
@@ -107,20 +155,32 @@ export const getThreads = query({
           
           const isLiked = !!existingLike;
 
-          // Check if current user is following this creator
+          // Check if current user is following this creator (using Clerk IDs)
           let isFollowing = false;
-          if (creator && creator._id && creator._id !== currentUser._id) {
+          if (creator && creator.clerkId && currentUser.clerkId && creator.clerkId !== currentUser.clerkId) {
             const existingFollow = await ctx.db
               .query('follows')
-              .filter((q) => 
-                q.and(
-                  q.eq(q.field('followerId'), currentUser._id),
-                  q.eq(q.field('followingId'), creator._id)
-                )
+              .withIndex('byFollowerAndFollowing', (q) => 
+                q.eq('followerId', currentUser.clerkId!).eq('followingId', creator.clerkId!)
               )
               .first();
             isFollowing = !!existingFollow;
           }
+
+          // Dynamically calculate commentCount from database (safer approach)
+          // Count all messages that have this thread as their parent (threadId or postId)
+          const comments = await ctx.db
+            .query('messages')
+            .filter((q) => 
+              q.or(
+                q.eq(q.field('threadId'), thread._id),
+                q.eq(q.field('postId'), thread._id)
+              )
+            )
+            .collect();
+          
+          // Only count posted comments (not drafts or scheduled)
+          const actualCommentCount = comments.filter(c => c.isPosted !== false && c.isDraft !== true).length;
 
           return {
             ...thread,
@@ -128,6 +188,8 @@ export const getThreads = query({
             creator,
             isLiked,
             isFollowing,
+            commentCount: actualCommentCount, // Use dynamically calculated count
+            isSaved: savedMessageIds.has(thread._id), // Include saved status
           };
         })
     );
@@ -276,7 +338,14 @@ export const getThreadComments = query({
   },
 });
 
-const getMessageCreator = async (ctx: QueryCtx, userId: Id<'users'>) => {
+const getMessageCreator = async (ctx: QueryCtx, userId: Id<'users'>): Promise<{
+  _id: Id<'users'>;
+  clerkId?: string;
+  first_name?: string;
+  last_name?: string;
+  username?: string | null;
+  imageUrl?: string;
+}> => {
   const user = await ctx.db.get(userId);
   if (!user) {
     return { _id: userId, first_name: '', last_name: '', imageUrl: undefined, username: '' };
@@ -290,13 +359,13 @@ const getMessageCreator = async (ctx: QueryCtx, userId: Id<'users'>) => {
   // If imageUrl is a storage ID, get the URL
   if (user.imageUrl) {
     const url = await ctx.storage.getUrl(user.imageUrl as Id<'_storage'>);
-    return { ...user, imageUrl: url };
+    return { ...user, imageUrl: url || undefined };
   }
   
   return { ...user, imageUrl: undefined };
 };
 
-const getMediaUrls = async (ctx: QueryCtx, mediaFiles: string[] | undefined) => {
+const getMediaUrls = async (ctx: QueryCtx, mediaFiles: string[] | undefined): Promise<string[]> => {
   if (!mediaFiles || mediaFiles.length === 0) {
     console.log('[getMediaUrls] No mediaFiles provided');
     return [];
@@ -304,18 +373,23 @@ const getMediaUrls = async (ctx: QueryCtx, mediaFiles: string[] | undefined) => 
 
   console.log('[getMediaUrls] Processing mediaFiles:', JSON.stringify(mediaFiles));
 
-  const urlPromises = mediaFiles.map((file) => ctx.storage.getUrl(file as Id<'_storage'>));
-  const results = await Promise.allSettled(urlPromises);
-  
-  const validUrls = results
-    .filter((result): result is PromiseFulfilledResult<string> => 
-      result.status === 'fulfilled' && result.value !== null && result.value !== undefined
-    )
-    .map((result) => result.value);
+  try {
+    const urlPromises = mediaFiles.map((file) => ctx.storage.getUrl(file as Id<'_storage'>));
+    const results = await Promise.allSettled(urlPromises);
     
-  console.log('[getMediaUrls] Converted URLs:', JSON.stringify(validUrls));
-  
-  return validUrls;
+    const validUrls = results
+      .filter((result): result is PromiseFulfilledResult<string> => 
+        result.status === 'fulfilled' && result.value !== null && result.value !== undefined
+      )
+      .map((result) => result.value);
+      
+    console.log('[getMediaUrls] Converted URLs:', JSON.stringify(validUrls));
+    
+    return validUrls;
+  } catch (error) {
+    console.error('[getMediaUrls] Error processing mediaFiles:', error);
+    return [];
+  }
 };
 
 export const generateUploadUrl = mutation(async (ctx) => {
@@ -548,6 +622,17 @@ export const deleteDraft = mutation({
       throw new Error('Not authorized to delete this draft');
     }
     
+    // If this draft is a comment (has threadId), decrement parent's comment count
+    if (draft.threadId) {
+      const parent = await ctx.db.get(draft.threadId);
+      if (parent) {
+        const newCommentCount = Math.max(0, (parent.commentCount || 1) - 1);
+        await ctx.db.patch(draft.threadId, {
+          commentCount: newCommentCount,
+        });
+      }
+    }
+    
     await ctx.db.delete(args.draftId);
 
     return { success: true };
@@ -670,6 +755,17 @@ export const deleteScheduledPost = mutation({
     // Only allow deleting scheduled (not yet posted) posts
     if (!message.isScheduled || message.isPosted) {
       throw new Error('Can only delete scheduled posts');
+    }
+    
+    // If this scheduled post is a comment (has threadId), decrement parent's comment count
+    if (message.threadId) {
+      const parent = await ctx.db.get(message.threadId);
+      if (parent) {
+        const newCommentCount = Math.max(0, (parent.commentCount || 1) - 1);
+        await ctx.db.patch(message.threadId, {
+          commentCount: newCommentCount,
+        });
+      }
     }
     
     await ctx.db.delete(args.messageId);
@@ -955,6 +1051,10 @@ export const getSavedPosts = query({
       if (message && !message.isDraft) {
         // Get creator info
         const creator = await ctx.db.get(message.userId);
+        
+        // Convert mediaFiles storage IDs to URLs
+        const mediaUrls = await getMediaUrls(ctx, message.mediaFiles);
+        
         // Check if liked by current user
         const like = await ctx.db
           .query('likes')
@@ -967,6 +1067,7 @@ export const getSavedPosts = query({
         
         threads.push({
           ...message,
+          mediaFiles: mediaUrls, // Use converted URLs
           creator,
           isLiked: !!like,
           isSaved: true,
@@ -976,6 +1077,78 @@ export const getSavedPosts = query({
     
     return {
       ...savedPosts,
+      page: threads,
+    };
+  },
+});
+
+// Get all liked posts for current user
+export const getLikedPosts = query({
+  args: {
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUserOrThrow(ctx);
+    console.log("[getLikedPosts] Current user ID:", user._id);
+    
+    // Get likes sorted by creation time descending - ONLY for current user
+    // Using byUserAndMessage index for more explicit filtering
+    const userLikes = await ctx.db
+      .query('likes')
+      .withIndex('byUser')
+      .filter((q) => q.eq(q.field('userId'), user._id))
+      .order('desc')
+      .paginate(args.paginationOpts);
+    
+    console.log("[getLikedPosts] Found likes for user:", userLikes.page.length);
+    
+    // If no likes, return empty immediately
+    if (userLikes.page.length === 0) {
+      return {
+        ...userLikes,
+        page: [],
+      };
+    }
+    
+    // Get the actual message details for each liked post
+    const threads = [];
+    for (const like of userLikes.page) {
+      // Double-check the like belongs to current user (safety check)
+      if (like.userId !== user._id) {
+        console.log("[getLikedPosts] Skipping like not owned by user:", like._id);
+        continue;
+      }
+      
+      // Verify the like record still exists in database
+      const likeExists = await ctx.db.get(like._id);
+      if (!likeExists) {
+        console.log("[getLikedPosts] Like record no longer exists:", like._id);
+        continue;
+      }
+      
+      const message = await ctx.db.get(like.messageId);
+      console.log("[getLikedPosts] Processing message:", like.messageId, "exists:", !!message);
+      if (message && !message.isDraft && message.isPosted !== false) {
+        // Get creator info
+        const creator = await ctx.db.get(message.userId);
+        
+        // Convert mediaFiles storage IDs to URLs
+        const mediaUrls = await getMediaUrls(ctx, message.mediaFiles);
+        
+        threads.push({
+          ...message,
+          mediaFiles: mediaUrls, // Use converted URLs
+          creator,
+          isLiked: true,
+          isSaved: false,
+        });
+      }
+    }
+    
+    console.log("[getLikedPosts] Returning threads:", threads.length);
+    
+    return {
+      ...userLikes,
       page: threads,
     };
   },

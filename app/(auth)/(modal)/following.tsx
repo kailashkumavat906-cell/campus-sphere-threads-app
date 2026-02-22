@@ -28,15 +28,14 @@ function useDebounce<T>(value: T, delay: number): T {
 }
 
 export default function FollowingScreen() {
-    const { userId } = useLocalSearchParams<{ userId: string }>();
+    const { clerkId } = useLocalSearchParams<{ clerkId: string }>();
     const router = useRouter();
     const colors = useThemeColors();
     const insets = useSafeAreaInsets();
     const [searchText, setSearchText] = useState('');
     const debouncedSearchText = useDebounce(searchText, 300);
-    const targetUserId = userId as Id<'users'> | undefined;
     
-    const followingData = useQuery(api.users.getFollowing, targetUserId ? { userId: targetUserId } : 'skip');
+    const followingData = useQuery(api.users.getFollowing, clerkId ? { clerkId } : 'skip');
     
     const filteredUsers = (followingData || []).filter(user => {
         if (!user) return false;

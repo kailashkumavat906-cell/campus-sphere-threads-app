@@ -35,16 +35,29 @@ export default function Profile({ userId: propUserId, showBackButton = true }: P
   const navigation = useNavigation();
   const router = useRouter();
   const params = useLocalSearchParams();
-  const [activeTab, setActiveTab] = useState<'Threads' | 'Replies' | 'Drafts'>('Threads');
+  const [activeTab, setActiveTab] = useState<'Posts' | 'Replies' | 'Drafts'>('Posts');
   const [refreshKey, setRefreshKey] = useState(0);
   const { userProfile } = useUserProfile();
   const { signOut } = useAuth();
   const { colors, theme, setTheme } = useThemeContext();
   
-  // Get userId from params if not provided as prop
+  // Get userId from params if not provided as prop - support both userId (internal) and clerkId
   const [profileUserId, setProfileUserId] = useState<Id<'users'> | undefined>(undefined);
   
+  // Query to get user by clerkId if needed
+  const userByClerkId = useQuery(
+    api.users.getUserByClerkId,
+    params.clerkId ? { clerkId: params.clerkId as string } : 'skip'
+  );
+  
   useEffect(() => {
+    // If clerkId is provided, use it to look up the user
+    if (params.clerkId && typeof params.clerkId === 'string') {
+      // The userByClerkId query will return the user, use its _id
+      // We'll handle this in another effect
+      return;
+    }
+    
     // If no userId in params, always show current user's profile
     if (!params.userId) {
       setProfileUserId(undefined); // Reset to trigger fallback to userProfile._id
@@ -55,7 +68,14 @@ export default function Profile({ userId: propUserId, showBackButton = true }: P
     }
     // If params.userId is undefined/null, we don't set profileUserId,
     // so the fallback to userProfile._id will be used
-  }, [params.userId, propUserId, userProfile]);
+  }, [params.userId, params.clerkId, propUserId, userProfile]);
+  
+  // When we get the user by clerkId, update the profileUserId
+  useEffect(() => {
+    if (userByClerkId) {
+      setProfileUserId(userByClerkId._id);
+    }
+  }, [userByClerkId]);
 
   // Menu state
   const [menuVisible, setMenuVisible] = useState(false);
@@ -96,11 +116,11 @@ export default function Profile({ userId: propUserId, showBackButton = true }: P
   const userDrafts = (draftsResult?.page || []).filter((item: any) => item.isDraft);
 
   const displayedData =
-    activeTab === 'Threads' ? userThreads : activeTab === 'Replies' ? userReplies : userDrafts;
+    activeTab === 'Posts' ? userThreads : activeTab === 'Replies' ? userReplies : userDrafts;
 
   const showDraftsTab = isOwnProfile;
 
-  const handleTabChange = (tab: 'Threads' | 'Replies' | 'Drafts') => {
+  const handleTabChange = (tab: 'Posts' | 'Replies' | 'Drafts') => {
     setActiveTab(tab);
   };
 
@@ -279,7 +299,7 @@ export default function Profile({ userId: propUserId, showBackButton = true }: P
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
             <Text style={[styles.tabContentText, { color: colors.icon }]}>
-              {activeTab === 'Threads'
+              {activeTab === 'Posts'
                 ? "You haven't posted any threads yet."
                 : activeTab === 'Replies'
                 ? "You haven't replied to any threads yet."

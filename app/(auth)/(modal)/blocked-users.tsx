@@ -3,10 +3,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useCallback } from 'react';
 import {
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -36,7 +36,7 @@ export default function BlockedUsersScreen() {
           <Ionicons name="person-remove" size={64} color={colors.icon} />
           <Text style={[styles.emptyTitle, { color: colors.text }]}>No Blocked Users</Text>
           <Text style={[styles.emptySubtitle, { color: colors.icon }]}>
-            When you block someone, they won't be able to find your profile or see your content.
+            When you block someone, they won&apos;t be able to find your profile or see your content.
           </Text>
         </View>
       </View>

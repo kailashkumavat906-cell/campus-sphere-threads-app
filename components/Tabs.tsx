@@ -3,27 +3,27 @@ import React, { useRef, useState } from 'react';
 import { Animated, LayoutChangeEvent, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 type TabsProps = {
-  onTabChange: (tab: 'Threads' | 'Replies' | 'Drafts') => void;
-  initialTab?: 'Threads' | 'Replies' | 'Drafts';
+  onTabChange: (tab: 'Posts' | 'Replies' | 'Drafts') => void;
+  initialTab?: 'Posts' | 'Replies' | 'Drafts';
   showDraftsTab?: boolean;
 };
 
-const Tabs = ({ onTabChange, initialTab = 'Threads', showDraftsTab = false }: TabsProps) => {
-  const [activeTab, setActiveTab] = useState<'Threads' | 'Replies' | 'Drafts'>(initialTab);
+const Tabs = ({ onTabChange, initialTab = 'Posts', showDraftsTab = false }: TabsProps) => {
+  const [activeTab, setActiveTab] = useState<'Posts' | 'Replies' | 'Drafts'>(initialTab);
   const [tabLayouts, setTabLayouts] = useState<{ [key: string]: { x: number; width: number } }>({});
   const colors = useThemeColors();
   
   // Animated underline position
   const translateX = useRef(new Animated.Value(0)).current;
   
-  const tabs = showDraftsTab ? ['Threads', 'Replies', 'Drafts'] : ['Threads', 'Replies'];
+  const tabs = showDraftsTab ? ['Posts', 'Replies', 'Drafts'] : ['Posts', 'Replies'];
 
   const handleTabLayout = (event: LayoutChangeEvent, tab: string) => {
     const { x, width } = event.nativeEvent.layout;
     setTabLayouts(prev => ({ ...prev, [tab]: { x, width } }));
   };
 
-  const handleTabPress = (tab: 'Threads' | 'Replies' | 'Drafts') => {
+  const handleTabPress = (tab: 'Posts' | 'Replies' | 'Drafts') => {
     setActiveTab(tab);
     onTabChange(tab);
     
@@ -48,7 +48,7 @@ const Tabs = ({ onTabChange, initialTab = 'Threads', showDraftsTab = false }: Ta
           key={tab}
           style={styles.tab}
           onLayout={(event) => handleTabLayout(event, tab)}
-          onPress={() => handleTabPress(tab as 'Threads' | 'Replies' | 'Drafts')}
+          onPress={() => handleTabPress(tab as 'Posts' | 'Replies' | 'Drafts')}
           activeOpacity={0.7}>
           <Text style={[
             styles.tabText,

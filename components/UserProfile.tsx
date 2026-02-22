@@ -36,54 +36,6 @@ const UserProfile = ({ userId }: UserProfileProps) => {
   // Check if viewing own profile
   const isOwnProfile = !userId || (userId === userProfile?._id);
   
-  // Query for isFollowing if viewing another user's profile
-  const isFollowingData = useQuery(
-    api.users.isFollowing,
-    !isOwnProfile && userId ? { userId } : 'skip'
-  );
-  
-  // Get following count
-  const followingData = useQuery(
-    api.users.getFollowing,
-    userId ? { userId } : 'skip'
-  );
-  
-  const followingCount = followingData?.length || 0;
-  
-  // Mutation for follow/unfollow
-  const followUser = useMutation(api.users.followUser);
-  const [isFollowing, setIsFollowing] = useState(false);
-  
-  // Update local state when query result changes
-  useEffect(() => {
-    if (isFollowingData !== undefined) {
-      setIsFollowing(isFollowingData);
-    }
-  }, [isFollowingData]);
-  
-  const handleFollowToggle = async () => {
-    if (!userId) return;
-    try {
-      const result = await followUser({ userId });
-      setIsFollowing(result.success);
-    } catch (error) {
-      console.error('Error toggling follow:', error);
-    }
-  };
-  
-  // Navigate to followers/following list
-  const navigateToFollowers = () => {
-    if (userId) {
-      router.push({ pathname: '/(auth)/(modal)/followers', params: { userId } });
-    }
-  };
-  
-  const navigateToFollowing = () => {
-    if (userId) {
-      router.push({ pathname: '/(auth)/(modal)/following', params: { userId } });
-    }
-  };
-  
   // Force refresh when screen comes into focus
   useFocusEffect(
     useCallback(() => {
@@ -103,6 +55,69 @@ const UserProfile = ({ userId }: UserProfileProps) => {
       setRefreshKey(prev => prev + 1);
     }
   }, [profile]);
+  
+  // Query for follow status (using Clerk ID of the profile being viewed)
+  const followStatus = useQuery(
+    api.users.getFollowStatus,
+    profile?.clerkId ? { clerkId: profile.clerkId } : 'skip'
+  );
+  
+  const isFollowing = followStatus?.isFollowing ?? false;
+  const followersCount = followStatus?.followersCount ?? 0;
+  const followingCount = followStatus?.followingCount ?? 0;
+  
+  // Query for follow request status (for private accounts)
+  const followRequestStatus = useQuery(
+    api.users.getFollowRequestStatus,
+    profile?.clerkId ? { targetClerkId: profile.clerkId } : 'skip'
+  );
+  
+  // Mutation for follow/unfollow and follow requests
+  const followUser = useMutation(api.users.followUser);
+  const unfollowUser = useMutation(api.users.unfollowUser);
+  const sendFollowRequest = useMutation(api.users.sendFollowRequest);
+  
+  const handleFollowToggle = async () => {
+    if (!profile?.clerkId) return;
+    try {
+      if (isFollowing) {
+        // Already following - unfollow
+        await unfollowUser({ userId: profile.clerkId });
+      } else if (followRequestStatus?.status === 'pending') {
+        // Already sent request - do nothing
+        console.log('Follow request already pending');
+      } else if (profile.isPrivate) {
+        // Private account - send follow request
+        await sendFollowRequest({ targetClerkId: profile.clerkId });
+      } else {
+        // Public account - follow directly
+        await followUser({ userId: profile.clerkId });
+      }
+      // State will automatically update from the query
+    } catch (error) {
+      console.error('Error toggling follow:', error);
+    }
+  };
+  
+  // Determine button text based on state
+  const getFollowButtonText = () => {
+    if (followRequestStatus?.status === 'pending') return 'Requested';
+    if (isFollowing) return 'Following';
+    return 'Follow';
+  };
+
+  // Navigate to followers/following list
+  const navigateToFollowers = () => {
+    if (profile?.clerkId) {
+      router.push({ pathname: '/(auth)/(modal)/followers', params: { clerkId: profile.clerkId } });
+    }
+  };
+  
+  const navigateToFollowing = () => {
+    if (profile?.clerkId) {
+      router.push({ pathname: '/(auth)/(modal)/following', params: { clerkId: profile.clerkId } });
+    }
+  };
 
   // Show loading state while fetching
   if (profile === undefined) {
@@ -134,7 +149,12 @@ const UserProfile = ({ userId }: UserProfileProps) => {
           <Text style={[styles.name, { color: colors.text }]}>
             {profile.first_name} {profile.last_name}
           </Text>
-          <Text style={[styles.username, { color: colors.icon }]}>@{profile.username}</Text>
+          <Text style={[styles.username, { color: colors.icon }]}>
+            @{profile.username}
+            {profile.isPrivate && (
+              <Text style={{ marginLeft: 4 }}> 🔒</Text>
+            )}
+          </Text>
           
           {/* College Details - From viewed user's profile data */}
           {getUserDisplayString(profile) && (
@@ -198,7 +218,7 @@ const UserProfile = ({ userId }: UserProfileProps) => {
             styles.followButtonText,
             { color: isFollowing ? colors.text : '#FFFFFF' }
           ]}>
-            {isFollowing ? 'Following' : 'Follow'}
+            {getFollowButtonText()}
           </Text>
         </TouchableOpacity>
       )}

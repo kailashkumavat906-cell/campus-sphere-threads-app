@@ -1,4 +1,7 @@
+import { api } from '@/convex/_generated/api';
+import { useAuth } from '@clerk/clerk-expo';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useMutation } from 'convex/react';
 import { useCallback, useEffect, useState } from 'react';
 
 const PRIVACY_KEYS = {
@@ -25,6 +28,8 @@ const defaultSettings: PrivacySettings = {
 export function usePrivacySettings() {
   const [settings, setSettings] = useState<PrivacySettings>(defaultSettings);
   const [isLoading, setIsLoading] = useState(true);
+  const { userId } = useAuth();
+  const updatePrivacySetting = useMutation(api.users.updatePrivacySetting);
 
   // Load settings on mount
   useEffect(() => {
@@ -61,12 +66,17 @@ export function usePrivacySettings() {
       
       // Persist to AsyncStorage
       await AsyncStorage.setItem(PRIVACY_KEYS[key], value.toString());
+      
+      // Sync private account setting with Convex backend
+      if (key === 'privateAccount' && userId) {
+        await updatePrivacySetting({ isPrivate: value });
+      }
     } catch (error) {
       console.error('Error saving privacy setting:', error);
       // Revert on error
       setSettings(prev => ({ ...prev, [key]: !value }));
     }
-  }, []);
+  }, [userId, updatePrivacySetting]);
 
   // Toggle a setting
   const toggleSetting = useCallback((key: keyof PrivacySettings) => {

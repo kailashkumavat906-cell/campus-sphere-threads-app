@@ -116,19 +116,19 @@ export const getRecommendedUsers = query({
   },
 });
 
-// Check if current user is following a specific user
+// Check if current user is following a specific user (by Clerk ID)
 export const isFollowing = query({
   args: {
-    userId: v.id('users'),
+    clerkId: v.string(), // Clerk ID of target user
   },
   handler: async (ctx, args) => {
     const currentUser = await getCurrentUser(ctx);
-    if (!currentUser) return false;
+    if (!currentUser || !currentUser.clerkId) return false;
 
     const existingFollow = await ctx.db
       .query('follows')
       .withIndex('byFollowerAndFollowing', (q) => 
-        q.eq('followerId', currentUser._id).eq('followingId', args.userId)
+        q.eq('followerId', currentUser.clerkId).eq('followingId', args.clerkId)
       )
       .unique();
 
@@ -136,16 +136,91 @@ export const isFollowing = query({
   },
 });
 
-// Follow a user
+// Get complete follow status for a user (by Clerk ID)
+export const getFollowStatus = query({
+  args: {
+    clerkId: v.string(), // Clerk ID of target user
+  },
+  handler: async (ctx, args) => {
+    // Get followers count (people following this user) - NO authentication needed
+    const followers = await ctx.db
+      .query('follows')
+      .withIndex('byFollowing', (q) => q.eq('followingId', args.clerkId))
+      .collect();
+
+    // Get following count (people this user follows) - NO authentication needed
+    const following = await ctx.db
+      .query('follows')
+      .withIndex('byFollower', (q) => q.eq('followerId', args.clerkId))
+      .collect();
+
+    // Check if current user is following - requires authentication
+    const identity = await ctx.auth.getUserIdentity();
+    let isFollowing = false;
+    
+    if (identity) {
+      const currentUserRecord = await ctx.db
+        .query('users')
+        .withIndex('byClerkId', (q) => q.eq('clerkId', identity.subject))
+        .unique();
+      
+      if (currentUserRecord) {
+        isFollowing = followers.some(f => f.followerId === identity.subject);
+      }
+    }
+
+    return {
+      isFollowing,
+      followersCount: followers.length,
+      followingCount: following.length,
+    };
+  },
+});
+
+// Get followers count for a user (by Clerk ID)
+export const getFollowersCount = query({
+  args: {
+    clerkId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const follows = await ctx.db
+      .query('follows')
+      .withIndex('byFollowing', (q) => q.eq('followingId', args.clerkId))
+      .collect();
+    
+    return follows.length;
+  },
+});
+
+// Get following count for a user (by Clerk ID)
+export const getFollowingCount = query({
+  args: {
+    clerkId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const follows = await ctx.db
+      .query('follows')
+      .withIndex('byFollower', (q) => q.eq('followerId', args.clerkId))
+      .collect();
+    
+    return follows.length;
+  },
+});
+
+// Follow a user (by Clerk ID)
 export const followUser = mutation({
   args: {
-    userId: v.id('users'),
+    userId: v.string(), // Clerk ID of target user
   },
   handler: async (ctx, args) => {
     const currentUser = await getCurrentUserOrThrow(ctx);
+    
+    if (!currentUser.clerkId) {
+      throw new Error("User not authenticated properly");
+    }
 
     // Can't follow yourself
-    if (currentUser._id === args.userId) {
+    if (currentUser.clerkId === args.userId) {
       throw new Error("You can't follow yourself");
     }
 
@@ -153,60 +228,82 @@ export const followUser = mutation({
     const existingFollow = await ctx.db
       .query('follows')
       .withIndex('byFollowerAndFollowing', (q) => 
-        q.eq('followerId', currentUser._id).eq('followingId', args.userId)
+        q.eq('followerId', currentUser.clerkId).eq('followingId', args.userId)
       )
       .unique();
 
     if (existingFollow) {
-      // Already following, unfollow
-      await ctx.db.delete(existingFollow._id);
-      
-      // Decrease followers count
-      const targetUser = await ctx.db.get(args.userId);
-      if (targetUser) {
-        await ctx.db.patch(args.userId, {
-          followersCount: Math.max(0, (targetUser.followersCount || 1) - 1),
-        });
-      }
-      
-      return { success: false };
+      // Already following, do nothing
+      return { success: true, action: 'already_following' };
     }
 
     // Create follow
     await ctx.db.insert('follows', {
-      followerId: currentUser._id,
+      followerId: currentUser.clerkId,
       followingId: args.userId,
       createdAt: Date.now(),
     });
 
-    // Increase followers count
-    const targetUser = await ctx.db.get(args.userId);
-    if (targetUser) {
-      await ctx.db.patch(args.userId, {
-        followersCount: (targetUser.followersCount || 0) + 1,
-      });
-    }
-
-    return { success: true };
+    return { success: true, action: 'followed' };
   },
 });
 
-// Get followers of a user
-export const getFollowers = query({
+// Unfollow a user (by Clerk ID)
+export const unfollowUser = mutation({
   args: {
-    userId: v.id('users'),
+    userId: v.string(), // Clerk ID of target user
   },
   handler: async (ctx, args) => {
-    // Get all follows where followingId = userId (people following this user)
+    const currentUser = await getCurrentUserOrThrow(ctx);
+    
+    if (!currentUser.clerkId) {
+      throw new Error("User not authenticated properly");
+    }
+
+    // Can't unfollow yourself
+    if (currentUser.clerkId === args.userId) {
+      throw new Error("You can't unfollow yourself");
+    }
+
+    // Check if currently following
+    const existingFollow = await ctx.db
+      .query('follows')
+      .withIndex('byFollowerAndFollowing', (q) => 
+        q.eq('followerId', currentUser.clerkId).eq('followingId', args.userId)
+      )
+      .unique();
+
+    if (!existingFollow) {
+      // Not following, do nothing
+      return { success: true, action: 'not_following' };
+    }
+
+    // Delete follow
+    await ctx.db.delete(existingFollow._id);
+    
+    return { success: true, action: 'unfollowed' };
+  },
+});
+
+// Get followers of a user (by Clerk ID)
+export const getFollowers = query({
+  args: {
+    clerkId: v.string(), // Clerk ID of target user
+  },
+  handler: async (ctx, args) => {
+    // Get all follows where followingId = clerkId (people following this user)
     const follows = await ctx.db
       .query('follows')
-      .withIndex('byFollowing', (q) => q.eq('followingId', args.userId))
+      .withIndex('byFollowing', (q) => q.eq('followingId', args.clerkId))
       .collect();
 
-    // Get user details for each follower
+    // Get user details for each follower by Clerk ID
     const followers = await Promise.all(
       follows.map(async (follow) => {
-        const user = await ctx.db.get(follow.followerId);
+        const user = await ctx.db
+          .query('users')
+          .withIndex('byClerkId', (q) => q.eq('clerkId', follow.followerId))
+          .unique();
         if (!user) return null;
         return {
           _id: user._id,
@@ -224,22 +321,25 @@ export const getFollowers = query({
   },
 });
 
-// Get users that a user is following
+// Get users that a user is following (by Clerk ID)
 export const getFollowing = query({
   args: {
-    userId: v.id('users'),
+    clerkId: v.string(), // Clerk ID of target user
   },
   handler: async (ctx, args) => {
-    // Get all follows where followerId = userId (people this user follows)
+    // Get all follows where followerId = clerkId (people this user follows)
     const follows = await ctx.db
       .query('follows')
-      .withIndex('byFollower', (q) => q.eq('followerId', args.userId))
+      .withIndex('byFollower', (q) => q.eq('followerId', args.clerkId))
       .collect();
 
-    // Get user details for each following
+    // Get user details for each following by Clerk ID
     const following = await Promise.all(
       follows.map(async (follow) => {
-        const user = await ctx.db.get(follow.followingId);
+        const user = await ctx.db
+          .query('users')
+          .withIndex('byClerkId', (q) => q.eq('clerkId', follow.followingId))
+          .unique();
         if (!user) return null;
         return {
           _id: user._id,
@@ -469,6 +569,308 @@ export const deleteFromClerk = internalMutation({
     } else {
       console.warn(`Can't delete user, there is none for Clerk user ID: ${clerkUserId}`);
     }
+  },
+});
+
+// ============ PRIVATE ACCOUNT FEATURE ============
+
+// Send a follow request to a private account
+export const sendFollowRequest = mutation({
+  args: {
+    targetClerkId: v.string(), // Clerk ID of user to send request to
+  },
+  handler: async (ctx, args) => {
+    const currentUser = await getCurrentUserOrThrow(ctx);
+    const { targetClerkId } = args;
+
+    // Can't follow yourself
+    if (currentUser.clerkId === targetClerkId) {
+      throw new Error("You can't follow yourself");
+    }
+
+    // Get target user
+    const targetUser = await ctx.db
+      .query('users')
+      .withIndex('byClerkId', (q) => q.eq('clerkId', targetClerkId))
+      .unique();
+
+    if (!targetUser) {
+      throw new Error('User not found');
+    }
+
+    // Check if already following
+    const existingFollow = await ctx.db
+      .query('follows')
+      .withIndex('byFollowerAndFollowing', (q) => 
+        q.eq('followerId', currentUser.clerkId).eq('followingId', targetClerkId)
+      )
+      .unique();
+
+    if (existingFollow) {
+      return { success: true, message: 'Already following' };
+    }
+
+    // Check if already have a pending request
+    const existingRequest = await ctx.db
+      .query('followRequests')
+      .withIndex('byToAndStatus', (q) => 
+        q.eq('toClerkId', targetClerkId).eq('status', 'pending')
+      )
+      .filter((q) => q.eq(q.field('fromClerkId'), currentUser.clerkId))
+      .first();
+
+    if (existingRequest) {
+      return { success: true, message: 'Request already sent' };
+    }
+
+    // If account is NOT private, follow directly without request
+    if (!targetUser.isPrivate) {
+      // Create follow relationship
+      await ctx.db.insert('follows', {
+        followerId: currentUser.clerkId,
+        followingId: targetClerkId,
+        createdAt: Date.now(),
+      });
+
+      // Update follower count
+      await ctx.db.patch(targetUser._id, {
+        followersCount: (targetUser.followersCount || 0) + 1,
+      });
+
+      return { success: true, message: 'Now following' };
+    }
+
+    // Account is private - send follow request
+    await ctx.db.insert('followRequests', {
+      fromClerkId: currentUser.clerkId,
+      toClerkId: targetClerkId,
+      status: 'pending',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    return { success: true, message: 'Follow request sent' };
+  },
+});
+
+// Accept a follow request
+export const acceptFollowRequest = mutation({
+  args: {
+    requestId: v.id('followRequests'),
+  },
+  handler: async (ctx, args) => {
+    const currentUser = await getCurrentUserOrThrow(ctx);
+
+    // Get the request
+    const request = await ctx.db.get(args.requestId);
+
+    if (!request) {
+      throw new Error('Request not found');
+    }
+
+    // Verify this request is for current user
+    if (request.toClerkId !== currentUser.clerkId) {
+      throw new Error('Not authorized');
+    }
+
+    if (request.status !== 'pending') {
+      throw new Error('Request already processed');
+    }
+
+    // Get the requester (follower) user
+    const requesterUser = await ctx.db
+      .query('users')
+      .withIndex('byClerkId', (q) => q.eq('clerkId', request.fromClerkId))
+      .unique();
+
+    // Create follow relationship (follower follows current user)
+    await ctx.db.insert('follows', {
+      followerId: request.fromClerkId,
+      followingId: currentUser.clerkId,
+      createdAt: Date.now(),
+    });
+
+    // Update follower count
+    if (requesterUser) {
+      await ctx.db.patch(requesterUser._id, {
+        followersCount: (requesterUser.followersCount || 0) + 1,
+      });
+    }
+
+    // Update request status
+    await ctx.db.patch(args.requestId, {
+      status: 'accepted',
+      updatedAt: Date.now(),
+    });
+
+    return { success: true };
+  },
+});
+
+// Reject a follow request
+export const rejectFollowRequest = mutation({
+  args: {
+    requestId: v.id('followRequests'),
+  },
+  handler: async (ctx, args) => {
+    const currentUser = await getCurrentUserOrThrow(ctx);
+
+    // Get the request
+    const request = await ctx.db.get(args.requestId);
+
+    if (!request) {
+      throw new Error('Request not found');
+    }
+
+    // Verify this request is for current user
+    if (request.toClerkId !== currentUser.clerkId) {
+      throw new Error('Not authorized');
+    }
+
+    if (request.status !== 'pending') {
+      throw new Error('Request already processed');
+    }
+
+    // Update request status
+    await ctx.db.patch(args.requestId, {
+      status: 'rejected',
+      updatedAt: Date.now(),
+    });
+
+    return { success: true };
+  },
+});
+
+// Cancel own follow request
+export const cancelFollowRequest = mutation({
+  args: {
+    targetClerkId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const currentUser = await getCurrentUserOrThrow(ctx);
+
+    // Find the pending request
+    const request = await ctx.db
+      .query('followRequests')
+      .withIndex('byToAndStatus', (q) => 
+        q.eq('toClerkId', args.targetClerkId).eq('status', 'pending')
+      )
+      .filter((q) => q.eq(q.field('fromClerkId'), currentUser.clerkId))
+      .first();
+
+    if (!request) {
+      return { success: true, message: 'No pending request' };
+    }
+
+    // Delete the request
+    await ctx.db.delete(request._id);
+
+    return { success: true };
+  },
+});
+
+// Get pending follow requests for current user
+export const getPendingFollowRequests = query({
+  args: {},
+  handler: async (ctx, args) => {
+    const currentUser = await getCurrentUserOrThrow(ctx);
+
+    const requests = await ctx.db
+      .query('followRequests')
+      .withIndex('byToAndStatus', (q) => 
+        q.eq('toClerkId', currentUser.clerkId).eq('status', 'pending')
+      )
+      .collect();
+
+    // Get user details for each request
+    const requestsWithUsers = await Promise.all(
+      requests.map(async (request) => {
+        const user = await ctx.db
+          .query('users')
+          .withIndex('byClerkId', (q) => q.eq('clerkId', request.fromClerkId))
+          .unique();
+
+        return {
+          ...request,
+          user: user ? {
+            _id: user._id,
+            clerkId: user.clerkId,
+            first_name: user.first_name,
+            last_name: user.last_name,
+            username: user.username,
+            imageUrl: user.imageUrl,
+          } : null,
+        };
+      })
+    );
+
+    return requestsWithUsers;
+  },
+});
+
+// Get follow request status for a user
+export const getFollowRequestStatus = query({
+  args: {
+    targetClerkId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const currentUser = await getCurrentUserOrThrow(ctx);
+
+    if (currentUser.clerkId === args.targetClerkId) {
+      return { status: 'self' };
+    }
+
+    // Check if already following
+    const existingFollow = await ctx.db
+      .query('follows')
+      .withIndex('byFollowerAndFollowing', (q) => 
+        q.eq('followerId', currentUser.clerkId).eq('followingId', args.targetClerkId)
+      )
+      .unique();
+
+    if (existingFollow) {
+      return { status: 'following' };
+    }
+
+    // Check for pending request
+    const pendingRequest = await ctx.db
+      .query('followRequests')
+      .withIndex('byToAndStatus', (q) => 
+        q.eq('toClerkId', args.targetClerkId).eq('status', 'pending')
+      )
+      .filter((q) => q.eq(q.field('fromClerkId'), currentUser.clerkId))
+      .first();
+
+    if (pendingRequest) {
+      return { status: 'pending' };
+    }
+
+    return { status: 'none' };
+  },
+});
+
+// Update user's privacy setting
+export const updatePrivacySetting = mutation({
+  args: {
+    isPrivate: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const currentUser = await getCurrentUserOrThrow(ctx);
+
+    await ctx.db.patch(currentUser._id, {
+      isPrivate: args.isPrivate,
+    });
+
+    return { success: true };
+  },
+});
+
+// Get user's privacy setting
+export const getPrivacySetting = query({
+  args: {},
+  handler: async (ctx, args) => {
+    const currentUser = await getCurrentUserOrThrow(ctx);
+    return currentUser.isPrivate || false;
   },
 });
 
