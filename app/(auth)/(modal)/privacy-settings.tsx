@@ -171,6 +171,11 @@ export default function PrivacySettingsScreen() {
     router.push('/(auth)/(modal)/data-activity');
   }, [router]);
 
+  const handleFollowRequests = useCallback(() => {
+    // @ts-ignore
+    router.push('/(auth)/(modal)/follow-requests');
+  }, [router]);
+
   if (isLoading) {
     return (
       <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -256,6 +261,14 @@ export default function PrivacySettingsScreen() {
         {/* Additional Options Section */}
         <View style={styles.section}>
           <Text style={[styles.sectionTitle, { color: colors.icon }]}>Additional Options</Text>
+          
+          <ClickableRow
+            title="Follow Requests"
+            subtitle="See who wants to follow you"
+            icon="person-add"
+            onPress={handleFollowRequests}
+            colors={colors}
+          />
           
           <ClickableRow
             title="Blocked Users"

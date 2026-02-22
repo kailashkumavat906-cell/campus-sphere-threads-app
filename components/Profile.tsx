@@ -10,8 +10,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { CommonActions, useNavigation } from '@react-navigation/native';
 import { useQuery } from 'convex/react';
 import { PaginationOptions } from 'convex/server';
+import * as Linking from 'expo-linking';
 import { Link, useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -176,6 +177,23 @@ export default function Profile({ userId: propUserId, showBackButton = true }: P
     }
   };
 
+  // Handle report a problem - open email
+  const handleReportProblem = useCallback(async () => {
+    const email = 'kumavatkailash60@gmail.com';
+    const subject = 'Campus Sphere - Problem Report';
+    const body = `App: Campus Sphere\n\nUser Email: ${userProfile?.email || 'Not available'}\n\nMessage: Describe your issue here...`;
+    
+    const mailtoUrl = `mailto:${email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    
+    const canOpen = await Linking.canOpenURL(mailtoUrl);
+    
+    if (canOpen) {
+      await Linking.openURL(mailtoUrl);
+    } else {
+      Alert.alert('Email app not found', 'Please install an email app to report problems.');
+    }
+  }, [userProfile]);
+
   // Build menu items with checkmarks for active theme
   const getMenuItems = () => {
     const items = [];
@@ -206,9 +224,9 @@ export default function Profile({ userId: propUserId, showBackButton = true }: P
     items.push({ icon: 'share-outline', label: 'Share Profile', onPress: handleShareProfile });
 
     // 4. Support & Info
-    items.push({ icon: 'flag-outline', label: 'Report a Problem', onPress: () => {} });
-    items.push({ icon: 'information-circle-outline', label: 'About App' });
-    items.push({ icon: 'document-text-outline', label: 'Terms & Privacy Policy' });
+    items.push({ icon: 'flag-outline', label: 'Report a Problem', onPress: handleReportProblem });
+    items.push({ icon: 'information-circle-outline', label: 'About App', onPress: () => router.push('/(auth)/(modal)/about') });
+    items.push({ icon: 'document-text-outline', label: 'Terms & Privacy Policy', onPress: () => router.push('/(auth)/(modal)/terms') });
     items.push({ icon: 'log-out-outline', label: 'Logout', danger: true, onPress: handleLogout });
 
     return items;

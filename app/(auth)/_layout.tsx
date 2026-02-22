@@ -98,6 +98,27 @@ const Layout = () => {
         }}
       />
       <Stack.Screen
+        name="(modal)/follow-requests"
+        options={{
+          presentation: 'modal',
+          headerShown: false,
+        }}
+      />
+      <Stack.Screen
+        name="(modal)/about"
+        options={{
+          presentation: 'modal',
+          headerShown: false,
+        }}
+      />
+      <Stack.Screen
+        name="(modal)/terms"
+        options={{
+          presentation: 'modal',
+          headerShown: false,
+        }}
+      />
+      <Stack.Screen
         name="(modal)/image/[url]"
         options={{
           presentation: 'fullScreenModal',
