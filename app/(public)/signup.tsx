@@ -11,6 +11,7 @@ import {
   Image,
   KeyboardAvoidingView,
   Platform,
+  SafeAreaView,
   StyleSheet,
   Text,
   TextInput,
@@ -40,7 +41,23 @@ export default function SignUpScreen() {
     return emailRegex.test(email);
   };
 
-    const validateFields = (): boolean => {
+    const validatePassword = (password: string): { isValid: boolean; error?: string } => {
+    if (!password || password.length < 8) {
+      return { isValid: false, error: 'Password must be at least 8 characters and include a number and special character.' };
+    }
+    
+    if (!/[0-9]/.test(password)) {
+      return { isValid: false, error: 'Password must be at least 8 characters and include a number and special character.' };
+    }
+    
+    if (!/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password)) {
+      return { isValid: false, error: 'Password must be at least 8 characters and include a number and special character.' };
+    }
+    
+    return { isValid: true };
+  };
+
+  const validateFields = (): boolean => {
     const newErrors: { email?: string; password?: string } = {};
     
     if (!email.trim()) {
@@ -49,12 +66,9 @@ export default function SignUpScreen() {
       newErrors.email = 'Please enter a valid email';
     }
     
-    if (!password) {
-      newErrors.password = 'Password is required';
-    } else if (password.length < 8) {
-      newErrors.password = 'Password must be at least 8 characters';
-    } else if (!/(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/.test(password)) {
-      newErrors.password = 'Password must contain uppercase, lowercase, and number';
+    const passwordValidation = validatePassword(password);
+    if (!passwordValidation.isValid) {
+      newErrors.password = passwordValidation.error;
     }
     
     setErrors(newErrors);
@@ -62,6 +76,13 @@ export default function SignUpScreen() {
   };
 
   const handleEmailSignUp = useCallback(async () => {
+    // First, validate password locally before attempting signup
+    const passwordValidation = validatePassword(password);
+    if (!passwordValidation.isValid) {
+      setErrors(prev => ({ ...prev, password: passwordValidation.error }));
+      return;
+    }
+
     if (!validateFields()) {
       return;
     }
@@ -92,9 +113,37 @@ export default function SignUpScreen() {
       // Navigate to verification page with signUp ID
       router.push({ pathname: '/verify', params: { email, signUpId: signUpResult.id } });
     } catch (error: any) {
+      // Log technical error only to console (not visible to users)
       console.error('Sign up error:', error);
-      const errorMessage = error?.errors?.[0]?.message || error?.message || 'Failed to sign up. Please try again.';
-      Alert.alert('Sign Up Error', errorMessage);
+      
+      // Extract error message safely
+      const errorMessage = error?.errors?.[0]?.message || error?.message || '';
+      const errorCode = error?.errors?.[0]?.code || '';
+      const lowerMessage = errorMessage.toLowerCase();
+      
+      // Check for password breach/compromised error from Clerk
+      const isBreachError = 
+        lowerMessage.includes('breach') || 
+        lowerMessage.includes('compromised') ||
+        lowerMessage.includes('exposed') ||
+        errorCode === 'password_breach' ||
+        errorCode === 'password_compromised' ||
+        errorCode === 'form_param_format_error';
+      
+      if (isBreachError) {
+        // Show clean user-friendly message for password breach
+        Alert.alert(
+          'Password Issue',
+          'Please choose a stronger password that has not been used before.'
+        );
+        setErrors(prev => ({ ...prev, password: 'Please choose a stronger password' }));
+      } else {
+        // Show generic error for other signup failures (never show raw error)
+        Alert.alert(
+          'Sign Up Error',
+          'Unable to create account. Please try again or use a different email.'
+        );
+      }
     } finally {
       setLoading(false);
     }
@@ -126,50 +175,51 @@ export default function SignUpScreen() {
   }, [router]);
 
   return (
-    <KeyboardAvoidingView 
-      style={[styles.container, { backgroundColor: colors.authBackground }]}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-    >
-      {/* Gradient Background */}
-      <View style={[styles.gradientBackground, { backgroundColor: colors.authBackground }]}>
-        <View style={[styles.gradientOverlay, { backgroundColor: colors.authBackgroundOverlay }]} />
-      </View>
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: colors.authBackground }]}>
+      <KeyboardAvoidingView 
+        style={[styles.container, { backgroundColor: colors.authBackground }]}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
+        {/* Gradient Background */}
+        <View style={[styles.gradientBackground, { backgroundColor: colors.authBackground }]}>
+          <View style={[styles.gradientOverlay, { backgroundColor: colors.authBackgroundOverlay }]} />
+        </View>
 
-      <View style={styles.content}>
-        {/* Card Container */}
-        <View style={[styles.card, { backgroundColor: colors.authCardBackground }]}>
-          {/* Logo Section */}
-          <View style={styles.logoSection}>
-            <Image 
-              source={require('@/assets/images/icon.png')}
-              style={styles.logo}
-              resizeMode="contain"
-            />
-            <Text style={[styles.logoTitle, { color: colors.authText }]}>Campus Sphere</Text>
-            <Text style={[styles.subtitle, { color: colors.authTextSecondary }]}>Connect Your Campus World</Text>
-          </View>
-
-          {/* Input Fields */}
-          <View style={styles.inputSection}>
-            {/* Email Input */}
-            <View style={[
-              styles.inputContainer, 
-              { 
-                backgroundColor: colors.authInputBackground, 
-                borderColor: colors.authInputBorder 
-              },
-              errors.email && { borderColor: colors.authError }
-            ]}>
-              <Ionicons 
-                name="mail-outline" 
-                size={20} 
-                color={colors.authInputIcon} 
-                style={styles.inputIcon} 
+        <View style={styles.content}>
+          {/* Card Container */}
+          <View style={[styles.card, { backgroundColor: colors.authCardBackground }]}>
+            {/* Logo Section */}
+            <View style={styles.logoSection}>
+              <Image 
+                source={require('@/assets/images/icon.png')}
+                style={styles.logo}
+                resizeMode="contain"
               />
-              <TextInput
-                style={[styles.input, { color: colors.authInputText }]}
-                placeholder="Email"
-                placeholderTextColor={colors.authTextPlaceholder}
+              <Text style={[styles.logoTitle, { color: colors.authText }]}>Campus Sphere</Text>
+              <Text style={[styles.subtitle, { color: colors.authTextSecondary }]}>Connect Your Campus World</Text>
+            </View>
+
+            {/* Input Fields */}
+            <View style={styles.inputSection}>
+              {/* Email Input */}
+              <View style={[
+                styles.inputContainer, 
+                { 
+                  backgroundColor: colors.authInputBackground, 
+                  borderColor: colors.authInputBorder 
+                },
+                errors.email && { borderColor: colors.authError }
+              ]}>
+                <Ionicons 
+                  name="mail-outline" 
+                  size={20} 
+                  color={colors.authInputIcon} 
+                  style={styles.inputIcon} 
+                />
+                <TextInput
+                  style={[styles.input, { color: colors.authInputText }]}
+                  placeholder="Email"
+                  placeholderTextColor={colors.authTextPlaceholder}
                 value={email}
                 onChangeText={(text) => {
                   setEmail(text);
@@ -293,10 +343,14 @@ export default function SignUpScreen() {
         </View>
       </View>
     </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+  },
   container: {
     flex: 1,
   },

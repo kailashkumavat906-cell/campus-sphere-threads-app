@@ -103,7 +103,7 @@ export const getThreads = query({
         // If account is not private, include
         if (!creator.isPrivate) return { thread, include: true };
         
-        // Account is private - check if current user is following
+        // Account is private - check if current user is following (accepted)
         const isFollowing = await ctx.db
           .query('follows')
           .withIndex('byFollowerAndFollowing', (q) => 
@@ -111,7 +111,26 @@ export const getThreads = query({
           )
           .first();
         
-        return { thread, include: !!isFollowing };
+        if (isFollowing) {
+          return { thread, include: true };
+        }
+        
+        // Also check if there's a pending follow request - if pending, don't show posts
+        const pendingRequest = await ctx.db
+          .query('followRequests')
+          .withIndex('byToAndStatus', (q) => 
+            q.eq('toClerkId', creator.clerkId).eq('status', 'pending')
+          )
+          .filter((q) => q.eq(q.field('fromClerkId'), currentUser.clerkId))
+          .first();
+        
+        // If there's a pending request, don't include the thread
+        if (pendingRequest) {
+          return { thread, include: false };
+        }
+        
+        // Not following and no pending request - don't show posts
+        return { thread, include: false };
       })
     );
     

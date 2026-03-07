@@ -103,7 +103,7 @@ export default function TermsScreen() {
         </Text>
 
         <Text style={[styles.paragraph, { color: colors.icon }]}>
-          If you have any questions or concerns about these terms, please use the "Report a Problem" feature in the app settings.
+          If you have any questions or concerns about these terms, please use the &quot;Report a Problem&quot; feature in the app settings.
         </Text>
 
         <Text style={[styles.lastUpdated, { color: colors.icon }]}>

@@ -38,9 +38,17 @@ export default function Profile({ userId: propUserId, showBackButton = true }: P
   const params = useLocalSearchParams();
   const [activeTab, setActiveTab] = useState<'Posts' | 'Replies' | 'Drafts'>('Posts');
   const [refreshKey, setRefreshKey] = useState(0);
-  const { userProfile } = useUserProfile();
+  const { userProfile, syncUserToConvex, isSignedIn, userLoaded } = useUserProfile();
   const { signOut } = useAuth();
   const { colors, theme, setTheme } = useThemeContext();
+  
+  // Auto-sync user if not found in Convex
+  useEffect(() => {
+    if (isSignedIn && userLoaded && !userProfile && syncUserToConvex) {
+      console.log('Profile: User not found in Convex, triggering sync...');
+      syncUserToConvex();
+    }
+  }, [isSignedIn, userLoaded, userProfile, syncUserToConvex]);
   
   // Get userId from params if not provided as prop - support both userId (internal) and clerkId
   const [profileUserId, setProfileUserId] = useState<Id<'users'> | undefined>(undefined);
@@ -78,12 +86,41 @@ export default function Profile({ userId: propUserId, showBackButton = true }: P
     }
   }, [userByClerkId]);
 
+  // Get profile user data for privacy check
+  const profileUser = useQuery(
+    api.users.getUserById,
+    profileUserId ? { userId: profileUserId } : 'skip'
+  );
+
+  // Get current user ID
+  const { userId: currentClerkId } = useAuth();
+
+  // Check if viewing own profile
+  const isOwnProfile = !params.clerkId || (currentClerkId && profileUser?.clerkId === currentClerkId);
+
+  // Check if profile is private and current user is not following
+  const profileFollowStatus = useQuery(
+    api.users.getFollowStatus,
+    profileUser?.clerkId && !isOwnProfile ? { clerkId: profileUser.clerkId } : 'skip'
+  );
+
+  const isFollowing = profileFollowStatus?.isFollowing ?? false;
+
+  // Check follow request status for private accounts
+  const followRequestStatus = useQuery(
+    api.users.getFollowRequestStatus,
+    profileUser?.clerkId && !isOwnProfile && !isFollowing ? { targetClerkId: profileUser.clerkId } : 'skip'
+  );
+
+  // Determine if we should show private account view
+  // eslint-disable-next-line no-console
+  console.log('[Profile] profileUser?.isPrivate:', profileUser?.isPrivate, 'isOwnProfile:', isOwnProfile, 'isFollowing:', isFollowing, 'profileUser?.clerkId:', profileUser?.clerkId, 'currentClerkId:', currentClerkId);
+  const showPrivateAccountView = profileUser?.isPrivate && !isOwnProfile && !isFollowing;
+
   // Menu state
   const [menuVisible, setMenuVisible] = useState(false);
 
   const profileId = profileUserId || userProfile?._id;
-  // Check if viewing own profile: no profileUserId set (using fallback) or userId matches current user
-  const isOwnProfile = !profileUserId || (profileUserId === userProfile?._id);
 
   // If viewing own profile, use userProfile; otherwise use the profileUserId for queries
 
@@ -234,7 +271,19 @@ export default function Profile({ userId: propUserId, showBackButton = true }: P
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.background, paddingTop: top }}>
-      <FlatList
+      {/* Show content or private account message */}
+      {showPrivateAccountView ? (
+        <View style={styles.centerContent}>
+          <Ionicons name="lock-closed" size={64} color={colors.icon} />
+          <Text style={[styles.emptyText, { color: colors.text, marginTop: 16 }]}>
+            This Account is Private
+          </Text>
+          <Text style={[styles.emptySubtext, { color: colors.icon, marginTop: 8, textAlign: 'center', paddingHorizontal: 32 }]}>
+            Follow this account to see their posts and media
+          </Text>
+        </View>
+      ) : (
+        <FlatList
         data={displayedData}
         keyExtractor={(item: any) => item._id}
         renderItem={({ item }: { item: any }) => {
@@ -301,7 +350,7 @@ export default function Profile({ userId: propUserId, showBackButton = true }: P
                   <TouchableOpacity>
                     <Thread 
                       thread={item} 
-                      showMenu={isOwnProfile}
+                      showMenu={!!isOwnProfile}
                       onDelete={() => {
                         // Force refresh to update the list after delete
                         setRefreshKey(prev => prev + 1);
@@ -386,12 +435,13 @@ export default function Profile({ userId: propUserId, showBackButton = true }: P
             <Tabs
               onTabChange={handleTabChange}
               initialTab={activeTab}
-              showDraftsTab={showDraftsTab}
+              showDraftsTab={!!showDraftsTab}
             />
           </>
         }
         showsVerticalScrollIndicator={false}
       />
+      )}
 
       {/* Three-dot Menu Bottom Sheet */}
       <BottomSheetMenu
@@ -468,6 +518,18 @@ const styles = StyleSheet.create({
   emptyContainer: {
     padding: 32,
     alignItems: 'center',
+  },
+  centerContent: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  emptyText: {
+    fontSize: 18,
+    fontWeight: '600',
+  },
+  emptySubtext: {
+    fontSize: 14,
   },
   collegeInfoContainer: {
     paddingHorizontal: 16,

@@ -1,6 +1,7 @@
 import { api } from '@/convex/_generated/api';
 import { Id } from '@/convex/_generated/dataModel';
 import { useThemeColors } from '@/hooks/useThemeColor';
+import { useAuth } from '@clerk/clerk-expo';
 import { useMutation, useQuery } from 'convex/react';
 import { router } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
@@ -43,6 +44,102 @@ function useDebounce<T>(value: T, delay: number): T {
     return debouncedValue;
 }
 
+// Individual user item component with follow status
+const UserItem = ({ 
+    item, 
+    onUserPress, 
+    onFollowPress,
+    isSearching 
+}: { 
+    item: SearchUser; 
+    onUserPress: (clerkId: string) => void;
+    onFollowPress: (clerkId: string, isCurrentlyFollowing: boolean) => void;
+    isSearching: boolean;
+}) => {
+    const colors = useThemeColors();
+    const { userId: currentUserId } = useAuth();
+    
+    // Get follow status for this user - single source of truth
+    const followStatus = useQuery(
+        api.users.getFollowStatus,
+        item.clerkId ? { clerkId: item.clerkId } : 'skip'
+    );
+    
+    const isFollowing = followStatus?.isFollowing ?? false;
+    const isOwner = currentUserId === item.clerkId;
+    
+    const fullName = [item.first_name, item.last_name].filter(Boolean).join(' ') || 'Unknown';
+    const username = item.username ? `@${item.username}` : '';
+
+    const formatFollowers = (count?: number) => {
+        if (!count) return '0 followers';
+        if (count >= 1000000) {
+            return `${(count / 1000000).toFixed(1)}M followers`;
+        }
+        if (count >= 1000) {
+            return `${(count / 1000).toFixed(1)}K followers`;
+        }
+        return `${count} followers`;
+    };
+
+    return (
+        <TouchableOpacity
+            style={[styles.userItem, { backgroundColor: colors.background }]}
+            onPress={() => onUserPress(item.clerkId)}
+            activeOpacity={0.7}
+        >
+            <View style={styles.userContent}>
+                <View style={styles.avatarContainer}>
+                    {item.imageUrl ? (
+                        <Image
+                            source={{ uri: item.imageUrl }}
+                            style={styles.avatar}
+                        />
+                    ) : (
+                        <View style={[styles.avatarPlaceholder, { backgroundColor: colors.tint }]}>
+                            <Text style={styles.avatarPlaceholderText}>
+                                {(item.first_name?.[0] || item.last_name?.[0] || '?').toUpperCase()}
+                            </Text>
+                        </View>
+                    )}
+                </View>
+                <View style={styles.userInfo}>
+                    <Text style={[styles.userName, { color: colors.text }]} numberOfLines={1}>
+                        {fullName}
+                    </Text>
+                    {username ? (
+                        <Text style={[styles.username, { color: colors.icon }]} numberOfLines={1}>
+                            {username}
+                        </Text>
+                    ) : null}
+                    <Text style={[styles.followers, { color: colors.icon }]} numberOfLines={1}>
+                        {formatFollowers(item.followersCount)}
+                    </Text>
+                </View>
+            </View>
+            {!isSearching && !isOwner && (
+                <TouchableOpacity
+                    style={[
+                        styles.followButton,
+                        isFollowing 
+                            ? { backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border }
+                            : { backgroundColor: colors.tint }
+                    ]}
+                    onPress={() => onFollowPress(item.clerkId, isFollowing)}
+                    activeOpacity={0.7}
+                >
+                    <Text style={[
+                        styles.followButtonText,
+                        { color: isFollowing ? colors.text : '#FFFFFF' }
+                    ]}>
+                        {isFollowing ? 'Following' : 'Follow'}
+                    </Text>
+                </TouchableOpacity>
+            )}
+        </TouchableOpacity>
+    );
+};
+
 const Page = () => {
     const colors = useThemeColors();
     const insets = useSafeAreaInsets();
@@ -73,76 +170,27 @@ const Page = () => {
         router.push(`/profile?clerkId=${clerkId}`);
     }, []);
 
-    const handleFollowPress = useCallback(async (clerkId: string) => {
+    const handleFollowPress = useCallback(async (clerkId: string, isCurrentlyFollowing: boolean) => {
         try {
-            await followUser({ userId: clerkId });
+            if (isCurrentlyFollowing) {
+                await unfollowUser({ userId: clerkId });
+            } else {
+                await followUser({ userId: clerkId });
+            }
+            // UI will automatically update from the query result
         } catch (error) {
-            console.error('Error following user:', error);
+            console.error('Error toggling follow:', error);
         }
-    }, [followUser]);
+    }, [followUser, unfollowUser]);
 
-    const formatFollowers = (count?: number) => {
-        if (!count) return '0 followers';
-        if (count >= 1000000) {
-            return `${(count / 1000000).toFixed(1)}M followers`;
-        }
-        if (count >= 1000) {
-            return `${(count / 1000).toFixed(1)}K followers`;
-        }
-        return `${count} followers`;
-    };
-
-    const renderUser = ({ item }: { item: SearchUser }) => {
-        const fullName = [item.first_name, item.last_name].filter(Boolean).join(' ') || 'Unknown';
-        const username = item.username ? `@${item.username}` : '';
-
-        return (
-            <TouchableOpacity
-                style={[styles.userItem, { backgroundColor: colors.background }]}
-                onPress={() => handleUserPress(item.clerkId)}
-                activeOpacity={0.7}
-            >
-                <View style={styles.userContent}>
-                    <View style={styles.avatarContainer}>
-                        {item.imageUrl ? (
-                            <Image
-                                source={{ uri: item.imageUrl }}
-                                style={styles.avatar}
-                            />
-                        ) : (
-                            <View style={[styles.avatarPlaceholder, { backgroundColor: colors.tint }]}>
-                                <Text style={styles.avatarPlaceholderText}>
-                                    {(item.first_name?.[0] || item.last_name?.[0] || '?').toUpperCase()}
-                                </Text>
-                            </View>
-                        )}
-                    </View>
-                    <View style={styles.userInfo}>
-                        <Text style={[styles.userName, { color: colors.text }]} numberOfLines={1}>
-                            {fullName}
-                        </Text>
-                        {username ? (
-                            <Text style={[styles.username, { color: colors.icon }]} numberOfLines={1}>
-                                {username}
-                            </Text>
-                        ) : null}
-                        <Text style={[styles.followers, { color: colors.icon }]} numberOfLines={1}>
-                            {formatFollowers(item.followersCount)}
-                        </Text>
-                    </View>
-                </View>
-                {!isSearching && (
-                    <TouchableOpacity
-                        style={[styles.followButton, { backgroundColor: colors.tint }]}
-                        onPress={() => handleFollowPress(item.clerkId)}
-                        activeOpacity={0.7}
-                    >
-                        <Text style={styles.followButtonText}>Follow</Text>
-                    </TouchableOpacity>
-                )}
-            </TouchableOpacity>
-        );
-    };
+    const renderUser = useCallback(({ item }: { item: SearchUser }) => (
+        <UserItem 
+            item={item} 
+            onUserPress={handleUserPress}
+            onFollowPress={handleFollowPress}
+            isSearching={isSearching}
+        />
+    ), [handleUserPress, handleFollowPress, isSearching, colors]);
 
     return (
         <View style={[styles.container, { backgroundColor: colors.background }]}>

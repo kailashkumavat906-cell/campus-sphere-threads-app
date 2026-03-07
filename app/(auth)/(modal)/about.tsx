@@ -67,7 +67,7 @@ export default function AboutScreen() {
         <View style={styles.contactContainer}>
           <Text style={[styles.sectionTitle, { color: colors.text }]}>Contact</Text>
           <Text style={[styles.contactText, { color: colors.icon }]}>
-            For support, use "Report a Problem" in settings.
+            For support, use &quot;Report a Problem&quot; in settings.
           </Text>
         </View>
 

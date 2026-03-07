@@ -4,7 +4,7 @@ import { useThemeColors } from '@/hooks/useThemeColor';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from 'convex/react';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, FlatList, Image, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -48,13 +48,21 @@ export default function FollowingScreen() {
 
     const isLoading = followingData === undefined;
 
+    const handleUserPress = useCallback((clerkId: string) => {
+        router.push(`/profile?clerkId=${clerkId}`);
+    }, [router]);
+
     const renderUser = ({ item }: { item: FollowUser | null }) => {
         if (!item) return null;
         const fullName = [item.first_name, item.last_name].filter(Boolean).join(' ') || 'Unknown';
         const username = item.username ? `@${item.username}` : '';
 
         return (
-            <View style={[styles.userItem, { backgroundColor: colors.background }]}>
+            <TouchableOpacity 
+                style={[styles.userItem, { backgroundColor: colors.background }]}
+                onPress={() => handleUserPress(item.clerkId)}
+                activeOpacity={0.7}
+            >
                 <View style={styles.userContent}>
                     <View style={styles.avatarContainer}>
                         {item.imageUrl ? (
@@ -72,7 +80,7 @@ export default function FollowingScreen() {
                         {username ? <Text style={[styles.username, { color: colors.icon }]} numberOfLines={1}>{username}</Text> : null}
                     </View>
                 </View>
-            </View>
+            </TouchableOpacity>
         );
     };
 

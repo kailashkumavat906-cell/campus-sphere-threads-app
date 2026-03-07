@@ -5,7 +5,7 @@ import { useAuth } from '@clerk/clerk-expo';
 import { Ionicons } from '@expo/vector-icons';
 import { useMutation, useQuery } from 'convex/react';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
     ActivityIndicator,
     FlatList,
@@ -29,7 +29,7 @@ type FollowUser = {
 };
 
 // Individual FollowUserItem component - can use hooks properly
-function FollowUserItem({ item }: { item: FollowUser }) {
+function FollowUserItem({ item, onUserPress }: { item: FollowUser; onUserPress: (clerkId: string) => void }) {
     const colors = useThemeColors();
     const { userId: currentUserId } = useAuth();
     const followUser = useMutation(api.users.followUser);
@@ -61,7 +61,11 @@ function FollowUserItem({ item }: { item: FollowUser }) {
     };
 
     return (
-        <View style={[styles.userItem, { backgroundColor: colors.background }]}>
+        <TouchableOpacity 
+            style={[styles.userItem, { backgroundColor: colors.background }]}
+            onPress={() => onUserPress(item.clerkId)}
+            activeOpacity={0.7}
+        >
             <View style={styles.userContent}>
                 <View style={styles.avatarContainer}>
                     {item.imageUrl ? (
@@ -87,22 +91,25 @@ function FollowUserItem({ item }: { item: FollowUser }) {
                         </Text>
                     ) : null}
                 </View>
-                {!isCurrentUser && (
-                    <TouchableOpacity
-                        style={[
-                            styles.followButton, 
-                            isFollowing ? { backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border } : { backgroundColor: colors.primary }
-                        ]}
-                        onPress={handleFollow}
-                    >
-                        <Text style={[
-                            styles.followButtonText, 
-                            { color: isFollowing ? colors.text : colors.background }
-                        ]}>{isFollowing ? 'Following' : 'Follow'}</Text>
-                    </TouchableOpacity>
-                )}
             </View>
-        </View>
+            {!isCurrentUser && (
+                <TouchableOpacity
+                    style={[
+                        styles.followButton, 
+                        isFollowing ? { backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border } : { backgroundColor: colors.primary }
+                    ]}
+                    onPress={(e) => {
+                        e.stopPropagation();
+                        handleFollow();
+                    }}
+                >
+                    <Text style={[
+                        styles.followButtonText, 
+                        { color: isFollowing ? colors.text : colors.background }
+                    ]}>{isFollowing ? 'Following' : 'Follow'}</Text>
+                </TouchableOpacity>
+            )}
+        </TouchableOpacity>
     );
 }
 
@@ -151,8 +158,12 @@ export default function FollowersScreen() {
     // Use memoized render function that doesn't use hooks
     const renderItem = ({ item }: { item: FollowUser | null }) => {
         if (!item) return null;
-        return <FollowUserItem item={item} />;
+        return <FollowUserItem item={item} onUserPress={handleUserPress} />;
     };
+
+    const handleUserPress = useCallback((clerkId: string) => {
+        router.push(`/profile?clerkId=${clerkId}`);
+    }, [router]);
 
     return (
         <View style={[styles.container, { backgroundColor: colors.background }]}>

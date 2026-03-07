@@ -77,6 +77,18 @@ export const FollowRequest = {
   updatedAt: v.number(),
 };
 
+export const Notification = {
+  userId: v.id('users'), // receiver
+  senderId: v.string(), // Clerk ID of the sender
+  senderUsername: v.string(),
+  senderImageUrl: v.optional(v.string()),
+  type: v.union(v.literal('like'), v.literal('follow'), v.literal('comment'), v.literal('mention')),
+  message: v.string(),
+  createdAt: v.number(),
+  isRead: v.boolean(),
+  relatedId: v.optional(v.id('messages')), // Optional reference to the message (for likes, comments, mentions)
+};
+
 export default defineSchema({
   users: defineTable(User).index('byClerkId', ['clerkId']).searchIndex('searchUsers', {
     searchField: 'username',
@@ -93,4 +105,9 @@ export default defineSchema({
   savedPosts: defineTable(SavedPost).index('byUserAndMessage', ['userId', 'messageId']).index('byUser', ['userId']),
   follows: defineTable(Follow).index('byFollowerAndFollowing', ['followerId', 'followingId']).index('byFollowing', ['followingId']).index('byFollower', ['followerId']),
   followRequests: defineTable(FollowRequest).index('byToClerkId', ['toClerkId']).index('byFromClerkId', ['fromClerkId']).index('byToAndStatus', ['toClerkId', 'status']),
+  notifications: defineTable(Notification)
+    .index('byUserId', ['userId'])
+    .index('byUserIdAndCreatedAt', ['userId', 'createdAt'])
+    .index('byUserIdAndIsRead', ['userId', 'isRead'])
+    .index('byUserIdAndType', ['userId', 'type']),
 });

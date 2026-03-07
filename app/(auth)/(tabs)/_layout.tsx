@@ -3,7 +3,7 @@ import { useAuth, useUser } from "@clerk/clerk-expo";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { Tabs, router } from "expo-router";
-import { StyleSheet, View } from "react-native";
+import { Pressable, StyleSheet, View } from "react-native";
 
 const styles = StyleSheet.create({
   createIconContainer: {
@@ -47,12 +47,27 @@ export default function Layout() {
         name="feed"
         options={{
           title: "Home",
+          headerTitle: "Home",
           tabBarIcon: ({ color, size, focused }) => (
             <Ionicons
               name={focused ? "home" : "home-outline"}
               size={size}
               color={color}
             />
+          ),
+          headerRight: () => (
+            <Pressable 
+              onPress={() => router.push("/(auth)/(modal)/notifications")}
+              style={{ padding: 8, marginRight: 8 }}
+            >
+              <View style={{ position: 'relative' }}>
+                <Ionicons 
+                  name="notifications-outline" 
+                  size={24} 
+                  color={colors.text} 
+                />
+              </View>
+            </Pressable>
           ),
         }}
       />

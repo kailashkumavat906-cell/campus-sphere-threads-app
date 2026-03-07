@@ -119,6 +119,13 @@ const Layout = () => {
         }}
       />
       <Stack.Screen
+        name="(modal)/notifications"
+        options={{
+          presentation: 'modal',
+          headerShown: false,
+        }}
+      />
+      <Stack.Screen
         name="(modal)/image/[url]"
         options={{
           presentation: 'fullScreenModal',
