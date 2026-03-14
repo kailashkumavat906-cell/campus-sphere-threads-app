@@ -1,3 +1,4 @@
+import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { useThemeColors } from "@/hooks/useThemeColor";
 import { Ionicons } from '@expo/vector-icons';
 import { Stack, useRouter } from 'expo-router';
@@ -6,6 +7,9 @@ import { Text, TouchableOpacity } from 'react-native';
 const Layout = () => {
   const router = useRouter();
   const colors = useThemeColors();
+  
+  // Track user online/offline status based on app state
+  useOnlineStatus();
 
   return (
     <Stack
@@ -84,6 +88,41 @@ const Layout = () => {
         }}
       />
       <Stack.Screen
+        name="(modal)/activity-history"
+        options={{
+          presentation: 'modal',
+          headerShown: false,
+        }}
+      />
+      <Stack.Screen
+        name="(modal)/search-history"
+        options={{
+          presentation: 'modal',
+          headerShown: false,
+        }}
+      />
+      <Stack.Screen
+        name="(modal)/interaction-history"
+        options={{
+          presentation: 'modal',
+          headerShown: false,
+        }}
+      />
+      <Stack.Screen
+        name="(modal)/login-activity"
+        options={{
+          presentation: 'modal',
+          headerShown: false,
+        }}
+      />
+      <Stack.Screen
+        name="(modal)/account-usage"
+        options={{
+          presentation: 'modal',
+          headerShown: false,
+        }}
+      />
+      <Stack.Screen
         name="(modal)/followers"
         options={{
           presentation: 'modal',
@@ -141,6 +180,13 @@ const Layout = () => {
               <Ionicons name="ellipsis-horizontal-circle" size={24} color="white" />
             </TouchableOpacity>
           ),
+        }}
+      />
+      <Stack.Screen
+        name="(modal)/archived-posts"
+        options={{
+          presentation: 'modal',
+          headerShown: false,
         }}
       />
     </Stack>

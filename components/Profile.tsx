@@ -8,7 +8,7 @@ import { useUserProfile } from '@/hooks/useUserProfile';
 import { useAuth } from '@clerk/clerk-expo';
 import { Ionicons } from '@expo/vector-icons';
 import { CommonActions, useNavigation } from '@react-navigation/native';
-import { useQuery } from 'convex/react';
+import { useMutation, usePaginatedQuery, useQuery } from 'convex/react';
 import { PaginationOptions } from 'convex/server';
 import * as Linking from 'expo-linking';
 import { Link, useLocalSearchParams, useRouter } from 'expo-router';
@@ -38,6 +38,10 @@ export default function Profile({ userId: propUserId, showBackButton = true }: P
   const params = useLocalSearchParams();
   const [activeTab, setActiveTab] = useState<'Posts' | 'Replies' | 'Drafts'>('Posts');
   const [refreshKey, setRefreshKey] = useState(0);
+  const [selectedDraft, setSelectedDraft] = useState<any>(null);
+  
+  // Mutation to delete a draft
+  const deleteDraft = useMutation(api.messages.deleteDraft);
   const { userProfile, syncUserToConvex, isSignedIn, userLoaded } = useUserProfile();
   const { signOut } = useAuth();
   const { colors, theme, setTheme } = useThemeContext();
@@ -51,7 +55,9 @@ export default function Profile({ userId: propUserId, showBackButton = true }: P
   }, [isSignedIn, userLoaded, userProfile, syncUserToConvex]);
   
   // Get userId from params if not provided as prop - support both userId (internal) and clerkId
+  // FIXED: Don't fallback to currentUserId when viewing another user's profile
   const [profileUserId, setProfileUserId] = useState<Id<'users'> | undefined>(undefined);
+  const [isViewingOtherUser, setIsViewingOtherUser] = useState(false);
   
   // Query to get user by clerkId if needed
   const userByClerkId = useQuery(
@@ -64,25 +70,30 @@ export default function Profile({ userId: propUserId, showBackButton = true }: P
     if (params.clerkId && typeof params.clerkId === 'string') {
       // The userByClerkId query will return the user, use its _id
       // We'll handle this in another effect
+      setIsViewingOtherUser(true);
       return;
     }
     
-    // If no userId in params, always show current user's profile
-    if (!params.userId) {
-      setProfileUserId(undefined); // Reset to trigger fallback to userProfile._id
-    } else if (params.userId && typeof params.userId === 'string') {
+    // If userId is provided in params, we're viewing another user's profile
+    if (params.userId && typeof params.userId === 'string') {
       setProfileUserId(params.userId as Id<'users'>);
+      setIsViewingOtherUser(true);
     } else if (propUserId) {
+      // If propUserId is provided, we're viewing another user's profile
       setProfileUserId(propUserId);
+      setIsViewingOtherUser(true);
+    } else {
+      // No userId in params - this is our own profile
+      setProfileUserId(undefined);
+      setIsViewingOtherUser(false);
     }
-    // If params.userId is undefined/null, we don't set profileUserId,
-    // so the fallback to userProfile._id will be used
   }, [params.userId, params.clerkId, propUserId, userProfile]);
   
   // When we get the user by clerkId, update the profileUserId
   useEffect(() => {
     if (userByClerkId) {
       setProfileUserId(userByClerkId._id);
+      setIsViewingOtherUser(true);
     }
   }, [userByClerkId]);
 
@@ -95,8 +106,24 @@ export default function Profile({ userId: propUserId, showBackButton = true }: P
   // Get current user ID
   const { userId: currentClerkId } = useAuth();
 
-  // Check if viewing own profile
-  const isOwnProfile = !params.clerkId || (currentClerkId && profileUser?.clerkId === currentClerkId);
+  // Check if viewing own profile - compare current user with viewed profile
+  const isOwnProfile = (!params.clerkId && !params.userId) || 
+    (currentClerkId && profileUser?.clerkId === currentClerkId) || 
+    (params.userId && userProfile?._id === params.userId);
+
+  // Check if profile user is blocked by current user
+  const profileBlockCheck = useQuery(
+    api.users.getUserProfileWithBlockStatus,
+    profileUser?.clerkId ? { profileClerkId: profileUser.clerkId } : 'skip'
+  );
+  
+  // Use the boolean result from isUserBlocked query
+  const isBlockedByView = profileBlockCheck?.blockedView ?? false;
+  const iBlockedThem = profileBlockCheck?.iBlockedThem ?? false;
+
+  // Block/Unblock mutation
+  const blockUser = useMutation(api.users.blockUser);
+  const unblockUser = useMutation(api.users.unblockUser);
 
   // Check if profile is private and current user is not following
   const profileFollowStatus = useQuery(
@@ -117,10 +144,18 @@ export default function Profile({ userId: propUserId, showBackButton = true }: P
   console.log('[Profile] profileUser?.isPrivate:', profileUser?.isPrivate, 'isOwnProfile:', isOwnProfile, 'isFollowing:', isFollowing, 'profileUser?.clerkId:', profileUser?.clerkId, 'currentClerkId:', currentClerkId);
   const showPrivateAccountView = profileUser?.isPrivate && !isOwnProfile && !isFollowing;
 
+  // Check if profile is blocked (either direction)
+  const showBlockedView = isBlockedByView && !isOwnProfile;
+
+  // Check if user is not found (for viewing other user's profile)
+  const showUserNotFound = isViewingOtherUser && !profileUserId && !profileUser;
+
   // Menu state
   const [menuVisible, setMenuVisible] = useState(false);
 
-  const profileId = profileUserId || userProfile?._id;
+  // FIXED: Use profileUserId directly for other users, only use userProfile._id for own profile
+  // This prevents the bug where viewing another user's profile shows current user's profile
+  const profileId = isViewingOtherUser ? profileUserId : (profileUserId || userProfile?._id);
 
   // If viewing own profile, use userProfile; otherwise use the profileUserId for queries
 
@@ -129,16 +164,19 @@ export default function Profile({ userId: propUserId, showBackButton = true }: P
     cursor: null,
   };
 
-  // Get user's threads
-  const threadsResult = useQuery(
-    api.messages.getThreads,
-    profileId ? { userId: profileId, paginationOpts } : { paginationOpts }
+  // Get user's threads using paginated query for proper infinite scroll
+  // Pass userId when viewing a specific user's profile, otherwise pass undefined to get all posts
+  const { results: threadsData, status: threadsStatus, loadMore: loadMoreThreads } = usePaginatedQuery(
+    api.messages.getThreads as any,
+    profileId ? { userId: profileId } : { userId: undefined, filterType: undefined },
+    { initialNumItems: 20 }
   );
 
-  // Get user's replies
-  const repliesResult = useQuery(
-    api.messages.getUserReplies,
-    profileId ? { userId: profileId, paginationOpts } : { paginationOpts }
+  // Get user's replies using paginated query
+  const { results: repliesData, status: repliesStatus, loadMore: loadMoreReplies } = usePaginatedQuery(
+    api.messages.getUserReplies as any,
+    profileId ? { userId: profileId } : 'skip',
+    { initialNumItems: 20 }
   );
 
   // Get user's drafts (only for own profile)
@@ -148,9 +186,10 @@ export default function Profile({ userId: propUserId, showBackButton = true }: P
   );
 
   // Get threads for current user only (not replies)
-  const userThreads = (threadsResult?.page || []).filter((item: any) => !item.threadId);
+  // usePaginatedQuery returns results directly (not .page)
+  const userThreads = (threadsData || []).filter((item: any) => !item.threadId);
   // Replies are already filtered by the query
-  const userReplies = (repliesResult?.page || []);
+  const userReplies = (repliesData || []);
   const userDrafts = (draftsResult?.page || []).filter((item: any) => item.isDraft);
 
   const displayedData =
@@ -165,6 +204,55 @@ export default function Profile({ userId: propUserId, showBackButton = true }: P
   const handleEditDraft = (draftId: string) => {
     // Navigate to create page with draft ID to edit
     router.push({ pathname: '/(auth)/(modal)/create', params: { draftId } });
+  };
+
+  const handleOpenDraftMenu = (draft: any) => {
+    setSelectedDraft(draft);
+    // Show options using Alert
+    Alert.alert(
+      'Draft Options',
+      'Choose an action',
+      [
+        {
+          text: 'Edit Draft',
+          onPress: () => handleEditDraft(draft._id),
+        },
+        {
+          text: 'Delete Draft',
+          style: 'destructive',
+          onPress: () => handleDeleteDraftConfirm(draft),
+        },
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+      ]
+    );
+  };
+
+  const handleDeleteDraftConfirm = (draft: any) => {
+    // Show confirmation dialog
+    Alert.alert(
+      'Delete Draft',
+      'Are you sure you want to delete this draft?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deleteDraft({ draftId: draft._id });
+              // Refresh to update the list
+              setRefreshKey(prev => prev + 1);
+            } catch (error) {
+              console.error('Error deleting draft:', error);
+              Alert.alert('Error', 'Failed to delete draft. Please try again.');
+            }
+          },
+        },
+      ]
+    );
   };
 
   const handleLogout = async () => {
@@ -231,6 +319,42 @@ export default function Profile({ userId: propUserId, showBackButton = true }: P
     }
   }, [userProfile]);
 
+  // Handle block/unblock user
+  const handleBlockUser = useCallback(async () => {
+    if (!profileUser?.clerkId) return;
+    
+    const action = isBlockedByView ? 'unblock' : 'block';
+    const userName = `${profileUser.first_name || ''} ${profileUser.last_name || ''}`.trim() || 'this user';
+    
+    Alert.alert(
+      `${action.charAt(0).toUpperCase() + action.slice(1)} User`,
+      `Are you sure you want to ${action} ${userName}?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: action === 'block' ? 'Block' : 'Unblock',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              if (isBlockedByView) {
+                await unblockUser({ blockedClerkId: profileUser.clerkId });
+                Alert.alert('Success', `You have unblocked ${userName}`);
+              } else {
+                await blockUser({ blockedClerkId: profileUser.clerkId });
+                Alert.alert('Success', `You have blocked ${userName}`);
+                // Navigate back after blocking
+                router.back();
+              }
+            } catch (error) {
+              console.error('Error blocking/unblocking user:', error);
+              Alert.alert('Error', `Unable to ${action} user. Please try again.`);
+            }
+          },
+        },
+      ]
+    );
+  }, [profileUser, isBlockedByView, blockUser, unblockUser, router]);
+
   // Build menu items with checkmarks for active theme
   const getMenuItems = () => {
     const items = [];
@@ -271,8 +395,12 @@ export default function Profile({ userId: propUserId, showBackButton = true }: P
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.background, paddingTop: top }}>
-      {/* Show content or private account message */}
-      {showPrivateAccountView ? (
+      {/* Show user not found, private account message, or main content */}
+      {showUserNotFound ? (
+        <View style={styles.centerContent}>
+          <Text style={[styles.emptyText, { color: colors.text }]}>User not found</Text>
+        </View>
+      ) : showPrivateAccountView ? (
         <View style={styles.centerContent}>
           <Ionicons name="lock-closed" size={64} color={colors.icon} />
           <Text style={[styles.emptyText, { color: colors.text, marginTop: 16 }]}>
@@ -284,9 +412,9 @@ export default function Profile({ userId: propUserId, showBackButton = true }: P
         </View>
       ) : (
         <FlatList
-        data={displayedData}
-        keyExtractor={(item: any) => item._id}
-        renderItem={({ item }: { item: any }) => {
+          data={displayedData}
+          keyExtractor={(item: any) => item._id}
+          renderItem={({ item }: { item: any }) => {
           if (!item || (activeTab !== 'Drafts' && !item.creator)) {
             return null;
           }
@@ -294,8 +422,8 @@ export default function Profile({ userId: propUserId, showBackButton = true }: P
             <>
               {activeTab === 'Drafts' ? (
                 <View style={styles.draftsContainer}>
-                  <TouchableOpacity onPress={() => handleEditDraft(item._id)}>
-                    <View style={styles.draftItem}>
+                  <View style={styles.draftItem}>
+                    <TouchableOpacity onPress={() => handleEditDraft(item._id)} style={styles.draftContentContainer}>
                       <View style={styles.draftHeader}>
                         {item.isPoll ? (
                           <Ionicons name="stats-chart-outline" size={20} color={colors.text} />
@@ -342,8 +470,17 @@ export default function Profile({ userId: propUserId, showBackButton = true }: P
                           </Text>
                         </View>
                       )}
-                    </View>
-                  </TouchableOpacity>
+                    </TouchableOpacity>
+                    
+                    {/* Three-dot menu button for drafts */}
+                    <TouchableOpacity 
+                      onPress={() => handleOpenDraftMenu(item)} 
+                      style={styles.draftMenuButton}
+                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    >
+                      <Ionicons name="ellipsis-horizontal" size={20} color={colors.text} />
+                    </TouchableOpacity>
+                  </View>
                 </View>
               ) : (
                 <Link href="/" asChild>
@@ -365,13 +502,25 @@ export default function Profile({ userId: propUserId, showBackButton = true }: P
         }}
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
-            <Text style={[styles.tabContentText, { color: colors.icon }]}>
-              {activeTab === 'Posts'
-                ? "You haven't posted any threads yet."
-                : activeTab === 'Replies'
-                ? "You haven't replied to any threads yet."
-                : 'No drafts saved yet.'}
-            </Text>
+            {showBlockedView ? (
+              <>
+                <Ionicons name="eye-off" size={48} color={colors.icon} />
+                <Text style={[styles.tabContentText, { color: colors.icon, marginTop: 12, textAlign: 'center', paddingHorizontal: 32 }]}>
+                  This account is not available{/* */}
+                </Text>
+                <Text style={[styles.emptySubtext, { color: colors.icon, marginTop: 8, textAlign: 'center', paddingHorizontal: 32 }]}>
+                  You can't see their posts, replies, or media
+                </Text>
+              </>
+            ) : (
+              <Text style={[styles.tabContentText, { color: colors.icon }]}>
+                {activeTab === 'Posts'
+                  ? "You haven't posted any threads yet."
+                  : activeTab === 'Replies'
+                  ? "You haven't replied to any threads yet."
+                  : 'No drafts saved yet.'}
+              </Text>
+            )}
           </View>
         }
         ListHeaderComponent={
@@ -422,10 +571,23 @@ export default function Profile({ userId: propUserId, showBackButton = true }: P
                     <Ionicons name="log-out-outline" size={24} color={colors.text} />
                   </TouchableOpacity>
                 )}
+                {/* Block User button - only show for other users */}
+                {!isOwnProfile && profileUser?.clerkId && (
+                  <TouchableOpacity
+                    onPress={handleBlockUser}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  >
+                    <Ionicons 
+                      name={isBlockedByView ? 'checkmark-circle' : 'ban-outline'} 
+                      size={24} 
+                      color={colors.text} 
+                    />
+                  </TouchableOpacity>
+                )}
               </View>
             </View>
             {profileId ? (
-              <UserProfile userId={profileId} />
+              <UserProfile userId={profileId} isBlocked={showBlockedView} iBlockedThem={iBlockedThem} />
             ) : (
               <View style={[styles.container, { backgroundColor: colors.background }]}>
                 <ActivityIndicator size="large" color={colors.tint} />
@@ -438,6 +600,22 @@ export default function Profile({ userId: propUserId, showBackButton = true }: P
               showDraftsTab={!!showDraftsTab}
             />
           </>
+        }
+        onEndReached={() => {
+          // Load more posts/replies based on active tab
+          if (activeTab === 'Posts' && threadsStatus === 'CanLoadMore') {
+            loadMoreThreads(20);
+          } else if (activeTab === 'Replies' && repliesStatus === 'CanLoadMore') {
+            loadMoreReplies(20);
+          }
+        }}
+        onEndReachedThreshold={0.5}
+        ListFooterComponent={
+          (activeTab === 'Posts' && threadsStatus === 'CanLoadMore') || 
+          (activeTab === 'Replies' && repliesStatus === 'CanLoadMore') ? (
+            <View style={[styles.loadingFooter, { backgroundColor: colors.background }]}>
+            </View>
+          ) : null
         }
         showsVerticalScrollIndicator={false}
       />
@@ -489,7 +667,17 @@ const styles = StyleSheet.create({
   draftsContainer: {
     paddingTop: 12,
   },
+  draftContentContainer: {
+    flex: 1,
+  },
+  draftMenuButton: {
+    padding: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   draftItem: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
     padding: 16,
   },
   draftHeader: {
@@ -540,5 +728,8 @@ const styles = StyleSheet.create({
   collegeInfoText: {
     fontSize: 14,
     opacity: 0.8,
+  },
+  loadingFooter: {
+    padding: 20,
   },
 });

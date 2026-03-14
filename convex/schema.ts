@@ -15,6 +15,16 @@ export const User = {
   pushToken: v.optional(v.string()),
   // Privacy setting
   isPrivate: v.optional(v.boolean()),
+  allowProfileSearch: v.optional(v.boolean()),
+  // Notification settings
+  enableNotifications: v.optional(v.boolean()),
+  notifyLikes: v.optional(v.boolean()),
+  notifyComments: v.optional(v.boolean()),
+  notifyFollows: v.optional(v.boolean()),
+  // Online status
+  isOnline: v.optional(v.boolean()),
+  lastSeen: v.optional(v.number()),
+  showOnlineStatus: v.optional(v.boolean()),
   // Education fields
   college: v.optional(v.string()),
   course: v.optional(v.string()),
@@ -38,6 +48,8 @@ export const Message = {
   isScheduled: v.optional(v.boolean()),
   isPosted: v.optional(v.boolean()),
   isDraft: v.optional(v.boolean()),
+  // Archive field
+  isArchived: v.optional(v.boolean()),
   // Poll fields
   isPoll: v.optional(v.boolean()),
   pollQuestion: v.optional(v.string()),
@@ -77,37 +89,70 @@ export const FollowRequest = {
   updatedAt: v.number(),
 };
 
+export const BlockedUser = {
+  blockerId: v.string(), // Clerk user ID - who is blocking
+  blockedId: v.string(), // Clerk user ID - who is being blocked
+  createdAt: v.number(),
+};
+
 export const Notification = {
   userId: v.id('users'), // receiver
   senderId: v.string(), // Clerk ID of the sender
   senderUsername: v.string(),
   senderImageUrl: v.optional(v.string()),
-  type: v.union(v.literal('like'), v.literal('follow'), v.literal('comment'), v.literal('mention')),
+  type: v.union(v.literal('like'), v.literal('follow'), v.literal('comment'), v.literal('mention'), v.literal('new_post'), v.literal('user_online')),
   message: v.string(),
   createdAt: v.number(),
   isRead: v.boolean(),
   relatedId: v.optional(v.id('messages')), // Optional reference to the message (for likes, comments, mentions)
 };
 
+export const Session = {
+  userId: v.id('users'),
+  clerkId: v.string(),
+  deviceName: v.string(),
+  deviceType: v.union(v.literal('mobile'), v.literal('desktop')),
+  loginTime: v.number(),
+  lastActive: v.number(),
+  isCurrentDevice: v.boolean(),
+  deviceInfo: v.optional(v.string()), // Additional device info (user agent, etc.)
+};
+
+export const SearchHistory = {
+  userId: v.id('users'),
+  searchedUsername: v.string(),
+  searchedClerkId: v.string(),
+  searchedAt: v.number(),
+};
+
 export default defineSchema({
   users: defineTable(User).index('byClerkId', ['clerkId']).searchIndex('searchUsers', {
     searchField: 'username',
   }),
+  sessions: defineTable(Session)
+    .index('byUser', ['userId'])
+    .index('byClerkId', ['clerkId'])
+    .index('byClerkIdAndCurrent', ['clerkId', 'isCurrentDevice']),
   messages: defineTable(Message)
     .index('byUser', ['userId'])
     .index('byUserAndPosted', ['userId', 'isPosted'])
     .index('byUserAndDraft', ['userId', 'isDraft'])
     .index('byThreadAndPosted', ['threadId', 'isPosted'])
     .index('byScheduledFor', ['scheduledFor'])
-    .index('byParentId', ['parentId']),
-  likes: defineTable(Like).index('byUserAndMessage', ['userId', 'messageId']).index('byUser', ['userId']),
+    .index('byParentId', ['parentId'])
+    .index('byUserAndParentId', ['userId', 'parentId']),
+  likes: defineTable(Like).index('byUserAndMessage', ['userId', 'messageId']).index('byUser', ['userId']).index('byMessage', ['messageId']),
   pollVotes: defineTable(PollVote).index('byUserAndPoll', ['userId', 'pollId']),
   savedPosts: defineTable(SavedPost).index('byUserAndMessage', ['userId', 'messageId']).index('byUser', ['userId']),
   follows: defineTable(Follow).index('byFollowerAndFollowing', ['followerId', 'followingId']).index('byFollowing', ['followingId']).index('byFollower', ['followerId']),
   followRequests: defineTable(FollowRequest).index('byToClerkId', ['toClerkId']).index('byFromClerkId', ['fromClerkId']).index('byToAndStatus', ['toClerkId', 'status']),
+  blockedUsers: defineTable(BlockedUser).index('byBlocker', ['blockerId']).index('byBlocked', ['blockedId']).index('byBlockerAndBlocked', ['blockerId', 'blockedId']),
   notifications: defineTable(Notification)
     .index('byUserId', ['userId'])
     .index('byUserIdAndCreatedAt', ['userId', 'createdAt'])
     .index('byUserIdAndIsRead', ['userId', 'isRead'])
     .index('byUserIdAndType', ['userId', 'type']),
+  searchHistory: defineTable(SearchHistory)
+    .index('byUser', ['userId'])
+    .index('byUserAndSearchedAt', ['userId', 'searchedAt']),
 });

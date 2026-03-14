@@ -52,7 +52,7 @@ const Tabs = ({ onTabChange, initialTab = 'Posts', showDraftsTab = false }: Tabs
           activeOpacity={0.7}>
           <Text style={[
             styles.tabText,
-            activeTab === tab && [styles.activeTabText, { color: colors.text }]
+            activeTab === tab && [styles.activeTabText, { color: colors.tint }]
           ]}>
             {tab}
           </Text>
@@ -64,7 +64,7 @@ const Tabs = ({ onTabChange, initialTab = 'Posts', showDraftsTab = false }: Tabs
         style={[
           styles.underline,
           {
-            backgroundColor: colors.text,
+            backgroundColor: colors.tint,
             transform: [{ translateX }],
             width: tabWidth,
           },

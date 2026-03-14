@@ -1,9 +1,25 @@
+import { api } from "@/convex/_generated/api";
 import { useThemeColors } from "@/hooks/useThemeColor";
 import { useAuth, useUser } from "@clerk/clerk-expo";
 import { Ionicons } from "@expo/vector-icons";
+import { useQuery } from "convex/react";
 import * as Haptics from "expo-haptics";
 import { Tabs, router } from "expo-router";
-import { Pressable, StyleSheet, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
+
+const CustomHeaderTitle = ({ colors }: { colors: any }) => (
+  <Text
+    style={{
+      fontSize: 23,
+      fontWeight: "700",
+      textAlign: "center",
+      letterSpacing: 0,
+      color: colors.text,
+    }}
+  >
+    CampusSphere
+  </Text>
+);
 
 const styles = StyleSheet.create({
   createIconContainer: {
@@ -26,6 +42,9 @@ export default function Layout() {
   const { signOut } = useAuth();
   const { user: clerkUser } = useUser();
   const colors = useThemeColors();
+  
+  // Get unread notification count
+  const unreadCount = useQuery(api.notifications.getUnreadNotificationCount) ?? 0;
 
   return (
     <Tabs
@@ -47,7 +66,7 @@ export default function Layout() {
         name="feed"
         options={{
           title: "Home",
-          headerTitle: "Home",
+          headerShown: false,
           tabBarIcon: ({ color, size, focused }) => (
             <Ionicons
               name={focused ? "home" : "home-outline"}
@@ -66,6 +85,27 @@ export default function Layout() {
                   size={24} 
                   color={colors.text} 
                 />
+                {unreadCount > 0 && (
+                  <View style={{
+                    position: 'absolute',
+                    top: -4,
+                    right: -4,
+                    backgroundColor: '#ff3b30',
+                    borderRadius: 10,
+                    paddingHorizontal: 5,
+                    minWidth: 18,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}>
+                    <Text style={{
+                      color: 'white',
+                      fontSize: 10,
+                      fontWeight: 'bold'
+                    }}>
+                      {unreadCount > 99 ? '99+' : unreadCount}
+                    </Text>
+                  </View>
+                )}
               </View>
             </Pressable>
           ),

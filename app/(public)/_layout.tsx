@@ -17,6 +17,7 @@ const Layout = () => {
             <Stack.Screen name="verify" options={{ headerShown: false}} />
             <Stack.Screen name="login" options={{ headerShown: false}} />
             <Stack.Screen name="login/email" options={{ headerShown: false}} />
+            <Stack.Screen name="login/reset-password" options={{ headerShown: false}} />
         </Stack>
     );
 };

@@ -1,17 +1,28 @@
 import { formatTimestamp } from '@/constants/notifications';
 import { Id } from '@/convex/_generated/dataModel';
 import { useThemeColors } from '@/hooks/useThemeColor';
-import React, { useMemo } from 'react';
+import { useUserProfileNavigation } from '@/hooks/useUserProfileNavigation';
+import React, { useEffect, useMemo } from 'react';
 import {
   Image,
   Pressable,
   StyleSheet,
   Text,
+  TouchableOpacity,
   View,
 } from 'react-native';
 
 // Types
-type NotificationType = 'like' | 'follow' | 'comment' | 'mention';
+type NotificationType = 'like' | 'follow' | 'comment' | 'mention' | 'new_post' | 'user_online';
+
+// Sender type with online status
+type SenderInfo = {
+  _id: Id<'users'>;
+  username?: string;
+  imageUrl?: string;
+  isOnline?: boolean;
+  showOnlineStatus?: boolean;
+};
 
 interface NotificationItemProps {
   notification: {
@@ -21,23 +32,50 @@ interface NotificationItemProps {
     senderId: string;
     senderUsername: string;
     senderImageUrl?: string;
+    senderIsOnline?: boolean;
+    senderShowOnlineStatus?: boolean;
+    sender?: SenderInfo;
     type: NotificationType;
     message: string;
     createdAt: number;
     isRead: boolean;
     relatedId?: Id<'messages'>;
+    postId?: Id<'messages'> | null;
+    postImageUrl?: string | null;
+    postText?: string | null;
   };
   onPress: (notification: any) => void;
   onFollowBack?: (senderId: string) => void;
+  isFollowing?: boolean;
+  currentUserClerkId?: string;
 }
 
 const NotificationItem: React.FC<NotificationItemProps> = ({
   notification,
   onPress,
   onFollowBack,
+  isFollowing = false,
+  currentUserClerkId,
 }) => {
   const colors = useThemeColors();
+  const { openUserProfile } = useUserProfileNavigation();
   const isFollowType = notification.type === 'follow';
+  const isNewPostType = notification.type === 'new_post';
+  const isUserOnlineType = notification.type === 'user_online';
+  
+  // For user_online notifications, don't show post preview or follow button
+  const showPostImage = !isUserOnlineType && (notification.type === 'like' || notification.type === 'comment' || notification.type === 'new_post') && notification.postImageUrl;
+  const showPostText = !isUserOnlineType && (notification.type === 'like' || notification.type === 'comment' || notification.type === 'new_post') && notification.postText;
+  
+  // Debug: Log sender info
+  useEffect(() => {
+    console.log('[NotificationItem] Sender data:', JSON.stringify(notification.sender));
+    console.log('[NotificationItem] Legacy fields:', { senderIsOnline: notification.senderIsOnline, senderShowOnlineStatus: notification.senderShowOnlineStatus });
+  }, [notification]);
+  
+  // Don't show follow button if the notification is from the current user
+  const isFromCurrentUser = currentUserClerkId && notification.senderId === currentUserClerkId;
+  const showFollowButton = isFollowType && onFollowBack && !isFromCurrentUser;
 
   // Memoize styles to avoid recreation on every render
   const dynamicStyles = useMemo(() => {
@@ -81,52 +119,95 @@ const NotificationItem: React.FC<NotificationItemProps> = ({
       ]}
       onPress={() => onPress(notification)}
     >
-      {/* Profile Image */}
-      <View style={styles.avatarContainer}>
-        {notification.senderImageUrl ? (
-          <Image
-            source={{ uri: notification.senderImageUrl }}
-            style={styles.avatar}
-          />
-        ) : (
-          <View style={[styles.placeholderAvatar, dynamicStyles.placeholderAvatar]}>
-            <Text style={[styles.placeholderText, dynamicStyles.placeholderText]}>
-              {notification.senderUsername.charAt(0).toUpperCase()}
-            </Text>
-          </View>
-        )}
-      </View>
+      {/* Profile Image - Clickable to open profile */}
+      <TouchableOpacity 
+        style={styles.avatarContainer}
+        onPress={() => openUserProfile(notification.senderId)}
+        activeOpacity={0.7}
+      >
+        <View style={styles.avatarWrapper}>
+          {/* Use sender object if available, otherwise fall back to legacy fields */}
+          {(notification.sender?.imageUrl || notification.senderImageUrl) ? (
+            <Image
+              source={{ uri: notification.sender?.imageUrl || notification.senderImageUrl }}
+              style={styles.avatar}
+            />
+          ) : (
+            <View style={[styles.placeholderAvatar, dynamicStyles.placeholderAvatar]}>
+              <Text style={[styles.placeholderText, dynamicStyles.placeholderText]}>
+                {notification.senderUsername.charAt(0).toUpperCase()}
+              </Text>
+            </View>
+          )}
+          {/* Online Indicator - check sender object first, then legacy fields */}
+          {((notification.sender?.isOnline === true && notification.sender?.showOnlineStatus === true) || 
+            (notification.senderIsOnline && notification.senderShowOnlineStatus)) && (
+            <View style={styles.onlineIndicator} />
+          )}
+        </View>
+      </TouchableOpacity>
 
       {/* Content */}
       <View style={styles.content}>
         <View style={styles.textContainer}>
-          <Text style={[styles.username, dynamicStyles.username]}>
-            {notification.senderUsername}
-          </Text>
+          {/* Username - Clickable to open profile */}
+          <TouchableOpacity onPress={() => openUserProfile(notification.senderId)}>
+            <Text style={[styles.username, dynamicStyles.username]}>
+              {notification.senderUsername}
+            </Text>
+          </TouchableOpacity>
           <Text style={[styles.message, dynamicStyles.message]} numberOfLines={2}>
             {notification.message}
           </Text>
+          {showPostText && (
+            <Text style={[styles.postText, { color: colors.icon }]} numberOfLines={1}>
+              {notification.postText}
+            </Text>
+          )}
           <Text style={[styles.timestamp, dynamicStyles.timestamp]}>
             {formatTimestamp(notification.createdAt)}
           </Text>
         </View>
 
-        {/* Right side: Follow button or Unread indicator */}
+        {/* Right side: Follow button, Unread indicator, or Post image preview */}
         <View style={styles.rightContainer}>
-          {isFollowType && onFollowBack && (
-            <Pressable
-              style={({ pressed }) => [
-                [styles.followButton, dynamicStyles.followButton],
-                pressed && styles.followButtonPressed,
-              ]}
-              onPress={() => onFollowBack(notification.senderId)}
-            >
-              <Text style={styles.followButtonText}>Follow</Text>
-            </Pressable>
+          {showPostImage && (
+            <Image
+              source={{ uri: notification.postImageUrl! }}
+              style={styles.postPreview}
+            />
           )}
-          
-          {!notification.isRead && (
-            <View style={[styles.unreadDot, dynamicStyles.unreadDot]} />
+          {!showPostImage && (
+            <>
+              {showFollowButton && (
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.followButton,
+                    isFollowing 
+                      ? { backgroundColor: 'transparent', borderWidth: 1, borderColor: colors.border }
+                      : dynamicStyles.followButton,
+                    pressed && styles.followButtonPressed,
+                  ]}
+                  onPress={() => onFollowBack!(notification.senderId)}
+                >
+                  <Text style={[
+                    styles.followButtonText,
+                    { color: isFollowing ? colors.text : '#FFFFFF' }
+                  ]}>
+                    {isFollowing ? 'Following' : 'Follow'}
+                  </Text>
+                </Pressable>
+              )}
+              
+              {!notification.isRead && (
+                <View style={[styles.unreadDot, dynamicStyles.unreadDot]} />
+              )}
+              
+              {/* Show green indicator for user_online notifications */}
+              {isUserOnlineType && (
+                <View style={[styles.unreadDot, { backgroundColor: '#22C55E' }]} />
+              )}
+            </>
           )}
         </View>
       </View>
@@ -166,6 +247,22 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '600',
   },
+  avatarWrapper: {
+    position: 'relative',
+    width: 44,
+    height: 44,
+  },
+  onlineIndicator: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#22c55e',
+    borderWidth: 2,
+    borderColor: '#fff',
+  },
   content: {
     flex: 1,
     flexDirection: 'row',
@@ -184,6 +281,10 @@ const styles = StyleSheet.create({
   message: {
     fontSize: 14,
     lineHeight: 18,
+    marginBottom: 2,
+  },
+  postText: {
+    fontSize: 12,
     marginBottom: 2,
   },
   timestamp: {
@@ -214,6 +315,11 @@ const styles = StyleSheet.create({
     height: 10,
     borderRadius: 5,
     marginTop: 8,
+  },
+  postPreview: {
+    width: 45,
+    height: 45,
+    borderRadius: 6,
   },
 });
 

@@ -1,3 +1,4 @@
+
 import { v } from 'convex/values';
 import { Id } from './_generated/dataModel';
 import { internalMutation, mutation, query, QueryCtx } from './_generated/server';
@@ -34,9 +35,34 @@ export const searchUsers = query({
       return [];
     }
 
-    // Get current user to exclude from results
+    // Get current user to exclude from results and get blocked list
     const currentUser = await getCurrentUser(ctx);
     const currentUserId = currentUser?._id;
+    const currentUserClerkId = currentUser?.clerkId;
+
+    // Get list of blocked user IDs (both ways for bidirectional blocking)
+    // 1. Users that current user has blocked
+    // 2. Users who have blocked current user
+    let blockedIds: string[] = [];
+    if (currentUserClerkId) {
+      // Users current user has blocked
+      const blockedByMe = await ctx.db
+        .query('blockedUsers')
+        .withIndex('byBlocker', (q) => q.eq('blockerId', currentUserClerkId))
+        .collect();
+      
+      // Users who have blocked current user
+      const blockedMe = await ctx.db
+        .query('blockedUsers')
+        .withIndex('byBlocked', (q) => q.eq('blockedId', currentUserClerkId))
+        .collect();
+      
+      // Combine both lists
+      blockedIds = [
+        ...blockedByMe.map(b => b.blockedId),
+        ...blockedMe.map(b => b.blockerId)
+      ];
+    }
 
     // Convert search text to lowercase for case-insensitive matching
     const searchLower = searchText.toLowerCase();
@@ -52,11 +78,21 @@ export const searchUsers = query({
       return allFollows.filter(f => f.followingId === clerkId).length;
     };
     
-    // Filter users matching the search text
+    // Filter users matching the search text and remove blocked users
     const matchingUsers = allUsers
       .filter((user) => {
         // Exclude current user from results
         if (currentUserId && user._id === currentUserId) {
+          return false;
+        }
+        
+        // Exclude blocked users
+        if (user.clerkId && blockedIds.includes(user.clerkId)) {
+          return false;
+        }
+        
+        // Exclude users who disabled profile search
+        if (user.allowProfileSearch === false) {
           return false;
         }
         
@@ -79,6 +115,9 @@ export const searchUsers = query({
         last_name: user.last_name,
         username: user.username,
         imageUrl: user.imageUrl,
+        // Online status fields
+        isOnline: user.isOnline,
+        showOnlineStatus: user.showOnlineStatus,
         // Use live followers count from follows table
         followersCount: getLiveFollowersCount(user.clerkId),
       }));
@@ -111,6 +150,11 @@ export const getRecommendedUsers = query({
       .filter((user) => {
         // Exclude current user from results
         if (currentUserId && user._id === currentUserId) {
+          return false;
+        }
+        
+        // Exclude users who disabled profile search
+        if (user.allowProfileSearch === false) {
           return false;
         }
         return true;
@@ -287,6 +331,33 @@ export const followUser = mutation({
       followingId: args.userId,
       createdAt: Date.now(),
     });
+
+    // Create follow notification for the target user
+    const targetUser = await ctx.db
+      .query('users')
+      .withIndex('byClerkId', (q) => q.eq('clerkId', args.userId))
+      .first();
+
+    if (targetUser) {
+      const senderUsername = currentUser.username || `${currentUser.first_name || ''} ${currentUser.last_name || ''}`.trim() || 'Someone';
+      
+      // Check notification preferences before creating notification
+      const enableNotifications = targetUser.enableNotifications !== false;
+      const notifyFollows = targetUser.notifyFollows !== false;
+      
+      if (enableNotifications && notifyFollows) {
+        await ctx.db.insert('notifications', {
+          userId: targetUser._id,
+          senderId: currentUser.clerkId,
+          senderUsername,
+          senderImageUrl: currentUser.imageUrl,
+          type: 'follow',
+          message: 'started following you',
+          createdAt: Date.now(),
+          isRead: false,
+        });
+      }
+    }
 
     return { success: true, action: 'followed' };
   },
@@ -504,6 +575,22 @@ export const updateUserImage = mutation({
     await ctx.db.patch(args._id, {
       imageUrl: args.imageUrl,
     });
+  },
+});
+
+// Update notification settings
+export const updateNotificationSetting = mutation({
+  args: {
+    enableNotifications: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const currentUser = await getCurrentUserOrThrow(ctx);
+    
+    await ctx.db.patch(currentUser._id, {
+      enableNotifications: args.enableNotifications,
+    });
+    
+    return { success: true, enableNotifications: args.enableNotifications };
   },
 });
 
@@ -945,6 +1032,42 @@ export const getPrivacySetting = query({
   },
 });
 
+// Update notification settings
+export const updateNotificationSettings = mutation({
+  args: {
+    enableNotifications: v.optional(v.boolean()),
+    notifyLikes: v.optional(v.boolean()),
+    notifyComments: v.optional(v.boolean()),
+    notifyFollows: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const currentUser = await getCurrentUserOrThrow(ctx);
+    
+    await ctx.db.patch(currentUser._id, {
+      enableNotifications: args.enableNotifications,
+      notifyLikes: args.notifyLikes,
+      notifyComments: args.notifyComments,
+      notifyFollows: args.notifyFollows,
+    });
+    
+    return { success: true };
+  },
+});
+
+// Get notification settings
+export const getNotificationSettings = query({
+  args: {},
+  handler: async (ctx, args) => {
+    const currentUser = await getCurrentUserOrThrow(ctx);
+    return {
+      enableNotifications: currentUser.enableNotifications ?? true,
+      notifyLikes: currentUser.notifyLikes ?? true,
+      notifyComments: currentUser.notifyComments ?? true,
+      notifyFollows: currentUser.notifyFollows ?? true,
+    };
+  },
+});
+
 export async function getCurrentUserOrThrow(ctx: QueryCtx) {
   const userRecord = await getCurrentUser(ctx);
   if (!userRecord) throw new Error("Can't get current user");
@@ -965,3 +1088,657 @@ async function userByExternalId(ctx: QueryCtx, externalId: string) {
     .withIndex('byClerkId', (q) => q.eq('clerkId', externalId))
     .unique();
 }
+
+// Block a user
+export const blockUser = mutation({
+  args: {
+    blockedClerkId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const currentUser = await getCurrentUserOrThrow(ctx);
+    
+    if (!currentUser.clerkId) {
+      throw new Error("Can't get current user's clerk ID");
+    }
+    
+    // Don't allow blocking yourself
+    if (currentUser.clerkId === args.blockedClerkId) {
+      throw new Error("You cannot block yourself");
+    }
+    
+    // Check if already blocked
+    const existingBlock = await ctx.db
+      .query('blockedUsers')
+      .withIndex('byBlockerAndBlocked', (q) => 
+        q.eq('blockerId', currentUser.clerkId).eq('blockedId', args.blockedClerkId)
+      )
+      .unique();
+    
+    if (existingBlock) {
+      return { success: true, message: 'User already blocked' };
+    }
+    
+    // Create block record
+    await ctx.db.insert('blockedUsers', {
+      blockerId: currentUser.clerkId,
+      blockedId: args.blockedClerkId,
+      createdAt: Date.now(),
+    });
+    
+    // Remove any follow relationship
+    const existingFollow = await ctx.db
+      .query('follows')
+      .withIndex('byFollowerAndFollowing', (q) => 
+        q.eq('followerId', currentUser.clerkId).eq('followingId', args.blockedClerkId)
+      )
+      .unique();
+    
+    if (existingFollow) {
+      await ctx.db.delete(existingFollow._id);
+    }
+    
+    // Also remove if the blocked user was following the current user
+    const existingFollower = await ctx.db
+      .query('follows')
+      .withIndex('byFollowerAndFollowing', (q) => 
+        q.eq('followerId', args.blockedClerkId).eq('followingId', currentUser.clerkId)
+      )
+      .unique();
+    
+    if (existingFollower) {
+      await ctx.db.delete(existingFollower._id);
+    }
+    
+    // Cancel any pending follow requests
+    const pendingRequest = await ctx.db
+      .query('followRequests')
+      .withIndex('byToAndStatus', (q) => 
+        q.eq('toClerkId', currentUser.clerkId).eq('status', 'pending')
+      )
+      .filter((q) => q.eq(q.field('fromClerkId'), args.blockedClerkId))
+      .first();
+    
+    if (pendingRequest) {
+      await ctx.db.delete(pendingRequest._id);
+    }
+    
+    return { success: true };
+  },
+});
+
+// Unblock a user
+export const unblockUser = mutation({
+  args: {
+    blockedClerkId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const currentUser = await getCurrentUserOrThrow(ctx);
+    
+    if (!currentUser.clerkId) {
+      throw new Error("Can't get current user's clerk ID");
+    }
+    
+    // Find and delete block record
+    const existingBlock = await ctx.db
+      .query('blockedUsers')
+      .withIndex('byBlockerAndBlocked', (q) => 
+        q.eq('blockerId', currentUser.clerkId).eq('blockedId', args.blockedClerkId)
+      )
+      .unique();
+    
+    if (existingBlock) {
+      await ctx.db.delete(existingBlock._id);
+    }
+    
+    return { success: true };
+  },
+});
+
+// Check if user is blocked
+export const isUserBlocked = query({
+  args: {
+    clerkId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const currentUser = await getCurrentUser(ctx);
+    
+    if (!currentUser || !currentUser.clerkId) {
+      return false;
+    }
+    
+    const existingBlock = await ctx.db
+      .query('blockedUsers')
+      .withIndex('byBlockerAndBlocked', (q) => 
+        q.eq('blockerId', currentUser.clerkId).eq('blockedId', args.clerkId)
+      )
+      .unique();
+    
+    return !!existingBlock;
+  },
+});
+
+// Get all blocked users
+export const getBlockedUsers = query({
+  args: {},
+  handler: async (ctx) => {
+    const currentUser = await getCurrentUserOrThrow(ctx);
+    
+    if (!currentUser.clerkId) {
+      throw new Error("Can't get current user's clerk ID");
+    }
+    
+    // Get all blocked user records for this blocker
+    const blocked = await ctx.db
+      .query('blockedUsers')
+      .withIndex('byBlocker', (q) => q.eq('blockerId', currentUser.clerkId))
+      .collect();
+    
+    const users = [];
+    
+    for (const item of blocked) {
+      // Get the blocked user's details using their clerkId
+      const blockedUser = await ctx.db
+        .query('users')
+        .withIndex('byClerkId', (q) => q.eq('clerkId', item.blockedId))
+        .unique();
+      
+      if (blockedUser) {
+        users.push({
+          ...blockedUser,
+          blockedAt: item.createdAt,
+        });
+      }
+    }
+    
+    return users;
+  },
+});
+
+// Helper function to check if either user has blocked the other (bidirectional check)
+// Returns true if:
+// - viewerId has blocked profileUserId, OR
+// - profileUserId has blocked viewerId
+export async function isBlocked(ctx: QueryCtx, viewerClerkId: string | undefined, profileClerkId: string | undefined): Promise<boolean> {
+  if (!viewerClerkId || !profileClerkId) {
+    return false;
+  }
+  
+  // Check if viewer has blocked profile user
+  const block1 = await ctx.db
+    .query('blockedUsers')
+    .withIndex('byBlockerAndBlocked', (q) => 
+      q.eq('blockerId', viewerClerkId).eq('blockedId', profileClerkId)
+    )
+    .first();
+  
+  if (block1) {
+    return true;
+  }
+  
+  // Check if profile user has blocked viewer
+  const block2 = await ctx.db
+    .query('blockedUsers')
+    .withIndex('byBlockerAndBlocked', (q) => 
+      q.eq('blockerId', profileClerkId).eq('blockedId', viewerClerkId)
+    )
+    .first();
+  
+  return !!block2;
+}
+
+// Get user's profile with blocked status - returns limited info if blocked
+export const getUserProfileWithBlockStatus = query({
+  args: {
+    profileClerkId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const currentUser = await getCurrentUser(ctx);
+    const viewerClerkId = currentUser?.clerkId;
+    
+    // Get the profile user by clerkId
+    const user = await ctx.db
+      .query('users')
+      .withIndex('byClerkId', (q) => q.eq('clerkId', args.profileClerkId))
+      .unique();
+    
+    if (!user) {
+      return null;
+    }
+    
+    // Check if either user has blocked the other (bidirectional)
+    const blocked = await isBlocked(ctx, viewerClerkId, args.profileClerkId);
+    
+    // Check specifically if current user blocked profile user
+    let iBlockedThem = false;
+    if (viewerClerkId) {
+      const blockRecord = await ctx.db
+        .query('blockedUsers')
+        .withIndex('byBlockerAndBlocked', (q) => 
+          q.eq('blockerId', viewerClerkId).eq('blockedId', args.profileClerkId)
+        )
+        .first();
+      iBlockedThem = !!blockRecord;
+    }
+    
+    // Get live follow counts
+    const followers = await ctx.db
+      .query('follows')
+      .withIndex('byFollowing', (q) => q.eq('followingId', args.profileClerkId))
+      .collect();
+    
+    const following = await ctx.db
+      .query('follows')
+      .withIndex('byFollower', (q) => q.eq('followerId', args.profileClerkId))
+      .collect();
+    
+    if (blocked && viewerClerkId !== args.profileClerkId) {
+      // Return limited profile info when blocked
+      return {
+        _id: user._id,
+        clerkId: user.clerkId,
+        username: user.username,
+        imageUrl: user.imageUrl,
+        bio: user.bio,
+        first_name: user.first_name,
+        last_name: user.last_name,
+        college: user.college,
+        course: user.course,
+        branch: user.branch,
+        semester: user.semester,
+        followersCount: followers.length,
+        followingCount: following.length,
+        posts: [],
+        replies: [],
+        blockedView: true,
+        iBlockedThem: iBlockedThem,
+      };
+    }
+    
+    // Return full profile info
+    return {
+      ...user,
+      followersCount: followers.length,
+      followingCount: following.length,
+      posts: [],
+      replies: [],
+      blockedView: false,
+      iBlockedThem: false,
+    };
+  },
+});
+
+// Get list of Clerk IDs that the current user has blocked
+export const getBlockedUserIds = query({
+  args: {},
+  handler: async (ctx) => {
+    const currentUser = await getCurrentUser(ctx);
+    
+    if (!currentUser || !currentUser.clerkId) {
+      return [];
+    }
+    
+    const blocked = await ctx.db
+      .query('blockedUsers')
+      .withIndex('byBlocker', (q) => q.eq('blockerId', currentUser.clerkId))
+      .collect();
+    
+    return blocked.map(b => b.blockedId);
+  },
+});
+
+// Set user as online (called when app opens)
+export const setUserOnline = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const currentUser = await getCurrentUserOrThrow(ctx);
+    
+    await ctx.db.patch(currentUser._id, {
+      isOnline: true,
+      lastSeen: Date.now(),
+    });
+    
+    return { success: true };
+  },
+});
+
+// Set user as offline (called when app goes to background)
+export const setUserOffline = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const currentUser = await getCurrentUserOrThrow(ctx);
+    
+    await ctx.db.patch(currentUser._id, {
+      isOnline: false,
+      lastSeen: Date.now(),
+    });
+    
+    return { success: true };
+  },
+});
+
+// Update show online status privacy setting
+export const updateShowOnlineStatus = mutation({
+  args: {
+    showOnlineStatus: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const currentUser = await getCurrentUserOrThrow(ctx);
+    
+    await ctx.db.patch(currentUser._id, {
+      showOnlineStatus: args.showOnlineStatus,
+    });
+    
+    return { success: true };
+  },
+});
+
+// Update allow profile search privacy setting
+export const updateAllowProfileSearch = mutation({
+  args: {
+    allowProfileSearch: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const currentUser = await getCurrentUserOrThrow(ctx);
+    
+    await ctx.db.patch(currentUser._id, {
+      allowProfileSearch: args.allowProfileSearch,
+    });
+    
+    return { success: true };
+  },
+});
+
+// Add to search history
+export const addToSearchHistory = mutation({
+  args: {
+    searchedUsername: v.string(),
+    searchedClerkId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const currentUser = await getCurrentUserOrThrow(ctx);
+    
+    // Check if already exists in recent history (within last hour)
+    const oneHourAgo = Date.now() - (60 * 60 * 1000);
+    const existingEntry = await ctx.db
+      .query('searchHistory')
+      .withIndex('byUserAndSearchedAt', (q) => 
+        q.eq('userId', currentUser._id)
+      )
+      .filter((q) => q.gte(q.field('searchedAt'), oneHourAgo))
+      .collect();
+    
+    const alreadySearched = existingEntry.find(
+      entry => entry.searchedClerkId === args.searchedClerkId
+    );
+    
+    if (!alreadySearched) {
+      await ctx.db.insert('searchHistory', {
+        userId: currentUser._id,
+        searchedUsername: args.searchedUsername,
+        searchedClerkId: args.searchedClerkId,
+        searchedAt: Date.now(),
+      });
+    }
+    
+    return { success: true };
+  },
+});
+
+// Get search history
+export const getSearchHistory = query({
+  args: {},
+  handler: async (ctx, args) => {
+    const currentUser = await getCurrentUser(ctx);
+    if (!currentUser) return [];
+    
+    const history = await ctx.db
+      .query('searchHistory')
+      .withIndex('byUserAndSearchedAt', (q) => 
+        q.eq('userId', currentUser._id)
+      )
+      .order('desc')
+      .take(50);
+    
+    return history;
+  },
+});
+
+// Clear search history
+export const clearSearchHistory = mutation({
+  args: {},
+  handler: async (ctx, args) => {
+    const currentUser = await getCurrentUserOrThrow(ctx);
+    
+    const history = await ctx.db
+      .query('searchHistory')
+      .withIndex('byUser', (q) => q.eq('userId', currentUser._id))
+      .collect();
+    
+    // Delete all entries
+    for (const entry of history) {
+      await ctx.db.delete(entry._id);
+    }
+    
+    return { success: true };
+  },
+});
+
+// Delete a single search history item
+export const deleteSearchHistoryItem = mutation({
+  args: { id: v.id('searchHistory') },
+  handler: async (ctx, args) => {
+    const currentUser = await getCurrentUserOrThrow(ctx);
+    
+    // Get the search history entry
+    const entry = await ctx.db.get(args.id);
+    
+    // Verify the entry exists and belongs to the current user
+    if (!entry || entry.userId !== currentUser._id) {
+      throw new Error('Search history entry not found or access denied');
+    }
+    
+    // Delete the entry
+    await ctx.db.delete(args.id);
+    
+    return { success: true };
+  },
+});
+
+// Get user's activity history (posts, comments, likes)
+export const getActivityHistory = query({
+  args: {},
+  handler: async (ctx, args) => {
+    const currentUser = await getCurrentUser(ctx);
+    if (!currentUser) return { posts: [], likes: [], comments: [] };
+    
+    // Get posts by user
+    const posts = await ctx.db
+      .query('messages')
+      .withIndex('byUser', (q) => q.eq('userId', currentUser._id))
+      .filter((q) => q.eq(q.field('isPosted'), true))
+      .order('desc')
+      .take(50);
+    
+    // Get likes by user
+    const likes = await ctx.db
+      .query('likes')
+      .withIndex('byUser', (q) => q.eq('userId', currentUser._id))
+      .order('desc')
+      .take(50);
+    
+    // Get messages that are comments (have parentId)
+    const allMessages = await ctx.db
+      .query('messages')
+      .withIndex('byUser', (q) => q.eq('userId', currentUser._id))
+      .filter((q) => q.neq(q.field('parentId'), undefined))
+      .order('desc')
+      .take(50);
+    
+    return {
+      posts: posts.map(p => ({
+        _id: p._id,
+        content: p.content,
+        createdAt: p._creationTime,
+        type: 'post',
+      })),
+      likes: likes.map(l => ({
+        _id: l._id,
+        messageId: l.messageId,
+        createdAt: l._creationTime,
+        type: 'like',
+      })),
+      comments: allMessages.map(c => ({
+        _id: c._id,
+        content: c.content,
+        parentId: c.parentId,
+        createdAt: c._creationTime,
+        type: 'comment',
+      })),
+    };
+  },
+});
+
+// Get interaction history (likes, comments, replies on user's posts)
+export const getInteractionHistory = query({
+  args: {},
+  handler: async (ctx, args) => {
+    const currentUser = await getCurrentUser(ctx);
+    if (!currentUser) return [];
+    
+    // Get all posts by current user
+    const userPosts = await ctx.db
+      .query('messages')
+      .withIndex('byUser', (q) => q.eq('userId', currentUser._id))
+      .filter((q) => q.eq(q.field('isPosted'), true))
+      .collect();
+    
+    const userPostIds = new Set(userPosts.map(p => p._id));
+    
+    // Get likes on user's posts
+    const allLikes = await ctx.db.query('likes').collect();
+    const likesOnPosts = allLikes.filter(l => userPostIds.has(l.messageId));
+    
+    // Get messages that are replies to user's posts
+    const allMessages = await ctx.db.query('messages').collect();
+    const repliesToPosts = allMessages.filter(
+      m => m.parentId && userPostIds.has(m.parentId)
+    );
+    
+    // Combine and sort by time
+    const interactions = [
+      ...likesOnPosts.map(l => ({
+        _id: l._id,
+        type: 'like' as const,
+        messageId: l.messageId,
+        createdAt: l._creationTime,
+      })),
+      ...repliesToPosts.map(r => ({
+        _id: r._id,
+        type: 'comment' as const,
+        content: r.content,
+        parentId: r.parentId,
+        createdAt: r._creationTime,
+      })),
+    ].sort((a, b) => b.createdAt - a.createdAt).slice(0, 50);
+    
+    return interactions;
+  },
+});
+
+// Get account usage statistics
+export const getAccountUsage = query({
+  args: {},
+  handler: async (ctx, args) => {
+    // Step 1: Get Current User
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) {
+      return null;
+    }
+    const currentUserId = identity.subject;
+    
+    // Get the Convex user record
+    const currentUser = await ctx.db
+      .query('users')
+      .withIndex('byClerkId', (q) => q.eq('clerkId', currentUserId))
+      .unique();
+    
+    if (!currentUser) return null;
+    
+    // Step 2: Total Posts - Count only posts created by the current user
+    // Must match exactly what the profile shows:
+    // - isPosted !== false (includes both true and undefined for backward compatibility)
+    // - isArchived !== true (excludes archived posts)
+    // - threadId === undefined (excludes replies/comments, only top-level posts)
+    const allUserMessages = await ctx.db
+      .query('messages')
+      .withIndex('byUser', (q) => q.eq('userId', currentUser._id))
+      .collect();
+    
+    // Filter for posts: isPosted !== false AND isArchived !== true AND threadId === undefined
+    // This exactly matches what the profile shows (Posts tab)
+    const posts = allUserMessages.filter(m => 
+      m.isPosted !== false && 
+      m.isArchived !== true &&
+      !m.threadId
+    );
+    const postIds = posts.map(p => p._id);
+    
+    // Step 3: Total Likes - Count all likes received on the user's posts
+    let totalLikes = 0;
+    for (const post of posts) {
+      const likesOnPost = await ctx.db
+        .query('likes')
+        .withIndex('byMessage', (q) => q.eq('messageId', post._id))
+        .collect();
+      totalLikes += likesOnPost.length;
+    }
+    
+    // Step 4: Total Comments - Count all comments on the user's visible posts
+    // Get all comments where threadId OR postId matches any of the user's post IDs
+    const allMessages = await ctx.db.query('messages').collect();
+    
+    // Create a Set of post IDs as strings for comparison
+    const postIdSet = new Set(postIds.map(id => id.toString()));
+    
+    // Filter comments that are on the user's posts and are posted
+    const commentsOnUserPosts = allMessages.filter(m => {
+      // Must be a comment (has threadId or postId, but no parentId for top-level comments)
+      const isComment = (m.threadId || m.postId) && !m.parentId;
+      if (!isComment) return false;
+      
+      // Must be on one of the user's visible posts
+      const commentThreadId = m.threadId?.toString();
+      const commentPostId = m.postId?.toString();
+      const isOnUserPost = (commentThreadId && postIdSet.has(commentThreadId)) || 
+                           (commentPostId && postIdSet.has(commentPostId));
+      if (!isOnUserPost) return false;
+      
+      // Must be posted (not draft, not scheduled)
+      return m.isPosted !== false && m.isDraft !== true;
+    });
+    
+    const totalComments = commentsOnUserPosts.length;
+    
+    // Step 5: Followers - Count users who follow the current user
+    const followers = await ctx.db
+      .query('follows')
+      .withIndex('byFollowing', (q) => q.eq('followingId', currentUserId))
+      .collect();
+    
+    // Step 6: Following - Count users the current user follows
+    const following = await ctx.db
+      .query('follows')
+      .withIndex('byFollower', (q) => q.eq('followerId', currentUserId))
+      .collect();
+
+    // Step 7: Return Statistics
+    return {
+      totalPosts: posts.length,
+      totalLikes: totalLikes,
+      totalComments: totalComments,
+      totalFollowers: followers.length,
+      totalFollowing: following.length,
+      accountCreatedAt: currentUser._creationTime,
+    };
+  },
+});

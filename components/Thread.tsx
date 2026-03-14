@@ -6,7 +6,7 @@ import { Feather, Ionicons } from '@expo/vector-icons';
 import { useMutation, useQuery } from 'convex/react';
 import { useRouter } from 'expo-router';
 import React, { useMemo, useState } from 'react';
-import { Alert, Image, ScrollView, Share, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, Image, Modal, Pressable, ScrollView, Share, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import ImageViewer from './ImageViewer';
 import PollCard from './PollCard';
 
@@ -37,6 +37,7 @@ const Thread = ({ thread, showMenu = false, onDelete, onLikeToggle }: ThreadProp
     const toggleSavePost = useMutation(api.messages.toggleSavePost);
     const voteOnPoll = useMutation(api.messages.voteOnPoll);
     const deleteThread = useMutation(api.messages.deleteThread);
+    const archivePost = useMutation(api.messages.archivePost);
     const followUser = useMutation(api.users.followUser);
     const unfollowUser = useMutation(api.users.unfollowUser);
     const router = useRouter();
@@ -46,6 +47,7 @@ const Thread = ({ thread, showMenu = false, onDelete, onLikeToggle }: ThreadProp
     const [localLikeCount, setLocalLikeCount] = useState(likeCount ?? 0);
     const [isSaved, setIsSaved] = useState(initialIsSaved || false);
     const [selectedImage, setSelectedImage] = useState<string | null>(null);
+    const [showPostMenu, setShowPostMenu] = useState(false);
     const colors = useThemeColors();
     
     // Get follow status from query (single source of truth)
@@ -234,17 +236,28 @@ const Thread = ({ thread, showMenu = false, onDelete, onLikeToggle }: ThreadProp
         <>
             <View style={styles.container}>
                 <TouchableOpacity onPress={navigateToProfile} activeOpacity={0.7}>
-                    {creator && creator.imageUrl ? (
-                        <Image
-                            source={{ uri: creator.imageUrl }}
-                            style={styles.avatar}
-                        />
-                    ) : (
-                        <Image
-                            source={require('@/assets/images/react-logo.png')}
-                            style={styles.avatar}
-                        />
-                    )}
+                    <View style={styles.avatarContainer}>
+                        {creator && creator.imageUrl ? (
+                            <Image
+                                source={{ uri: creator.imageUrl }}
+                                style={styles.avatar}
+                            />
+                        ) : (
+                            <Image
+                                source={require('@/assets/images/react-logo.png')}
+                                style={styles.avatar}
+                            />
+                        )}
+                        {/* Online Indicator */}
+                        {creator && creator.isOnline && creator.showOnlineStatus && (
+                            <View style={styles.onlineIndicator} />
+                        )}
+                        {creator && (
+                            <>
+                            {console.log('[Thread] Creator online status:', creator.isOnline, 'showOnlineStatus:', creator.showOnlineStatus)}
+                            </>
+                        )}
+                    </View>
                 </TouchableOpacity>
                 <View style={styles.contentContainer}>
                     <View style={styles.header}>
@@ -263,13 +276,15 @@ const Thread = ({ thread, showMenu = false, onDelete, onLikeToggle }: ThreadProp
                             <TouchableOpacity
                                 style={[
                                     styles.followButton,
-                                    isFollowing ? { backgroundColor: colors.background } : { backgroundColor: colors.primary }
+                                    isFollowing 
+                                        ? { backgroundColor: 'transparent', borderWidth: 1, borderColor: colors.border }
+                                        : { backgroundColor: colors.primary }
                                 ]}
                                 onPress={handleFollow}
                             >
                                 <Text style={[
                                     styles.followButtonText,
-                                    { color: isFollowing ? colors.text : colors.background }
+                                    { color: isFollowing ? colors.text : '#FFFFFF' }
                                 ]}>
                                     {isFollowing ? 'Following' : 'Follow'}
                                 </Text>
@@ -279,31 +294,7 @@ const Thread = ({ thread, showMenu = false, onDelete, onLikeToggle }: ThreadProp
                         {showMenu && isOwner && (
                             <TouchableOpacity 
                                 style={styles.moreButton}
-                                onPress={() => {
-                                    Alert.alert(
-                                        isReply ? 'Delete this reply?' : 'Delete this thread?',
-                                        'This action cannot be undone.',
-                                        [
-                                            { text: 'Cancel', style: 'cancel' },
-                                            {
-                                                text: 'Delete',
-                                                style: 'destructive',
-                                                onPress: async () => {
-                                                    try {
-                                                        await deleteThread({ threadId: thread._id });
-                                                        // Notify parent to refresh
-                                                        if (onDelete) {
-                                                            onDelete(thread._id);
-                                                        }
-                                                    } catch (error) {
-                                                        console.error('Failed to delete thread:', error);
-                                                        Alert.alert('Error', 'Failed to delete thread. Please try again.');
-                                                    }
-                                                },
-                                            },
-                                        ]
-                                    );
-                                }}
+                                onPress={() => setShowPostMenu(true)}
                             >
                                 <Ionicons
                                     name="ellipsis-horizontal"
@@ -313,6 +304,86 @@ const Thread = ({ thread, showMenu = false, onDelete, onLikeToggle }: ThreadProp
                             </TouchableOpacity>
                         )}
                     </View>
+
+                    {/* Bottom Sheet Menu for Post Options */}
+                    <Modal
+                        visible={showPostMenu}
+                        transparent
+                        animationType="slide"
+                        onRequestClose={() => setShowPostMenu(false)}
+                    >
+                        <Pressable 
+                            style={styles.modalOverlay}
+                            onPress={() => setShowPostMenu(false)}
+                        >
+                            <Pressable 
+                                style={[styles.bottomSheet, { backgroundColor: colors.background }]}
+                                onPress={(e) => e.stopPropagation()}
+                            >
+                                <View style={[styles.bottomSheetHandle, { backgroundColor: colors.icon }]} />
+                                <Text style={[styles.bottomSheetTitle, { color: colors.text }]}>Post Options</Text>
+                                
+                                <TouchableOpacity
+                                    style={styles.bottomSheetOption}
+                                    onPress={async () => {
+                                        setShowPostMenu(false);
+                                        try {
+                                            await archivePost({ messageId: thread._id });
+                                            Alert.alert('Success', 'Post archived successfully');
+                                            if (onDelete) {
+                                                onDelete(thread._id);
+                                            }
+                                        } catch (error) {
+                                            console.error('Failed to archive post:', error);
+                                            Alert.alert('Error', 'Failed to archive post. Please try again.');
+                                        }
+                                    }}
+                                >
+                                    <Ionicons name="archive-outline" size={22} color={colors.text} />
+                                    <Text style={[styles.bottomSheetOptionText, { color: colors.text }]}>Archive Post</Text>
+                                </TouchableOpacity>
+                                
+                                <TouchableOpacity
+                                    style={styles.bottomSheetOption}
+                                    onPress={() => {
+                                        setShowPostMenu(false);
+                                        Alert.alert(
+                                            isReply ? 'Delete this reply?' : 'Delete this post?',
+                                            'This action cannot be undone.',
+                                            [
+                                                { text: 'Cancel', style: 'cancel' },
+                                                {
+                                                    text: 'Delete',
+                                                    style: 'destructive',
+                                                    onPress: async () => {
+                                                        try {
+                                                            await deleteThread({ threadId: thread._id });
+                                                            if (onDelete) {
+                                                                onDelete(thread._id);
+                                                            }
+                                                        } catch (error) {
+                                                            console.error('Failed to delete thread:', error);
+                                                            Alert.alert('Error', 'Failed to delete thread. Please try again.');
+                                                        }
+                                                    },
+                                                },
+                                            ]
+                                        );
+                                    }}
+                                >
+                                    <Ionicons name="trash-outline" size={22} color="#FF3B30" />
+                                    <Text style={[styles.bottomSheetOptionText, { color: '#FF3B30' }]}>Delete Post</Text>
+                                </TouchableOpacity>
+                                
+                                <TouchableOpacity
+                                    style={[styles.bottomSheetOption, { borderBottomWidth: 0 }]}
+                                    onPress={() => setShowPostMenu(false)}
+                                >
+                                    <Text style={[styles.bottomSheetCancelText, { color: colors.text }]}>Cancel</Text>
+                                </TouchableOpacity>
+                            </Pressable>
+                        </Pressable>
+                    </Modal>
 
                     <Text style={[styles.content, { color: colors.text }]}>{content}</Text>
 
@@ -424,6 +495,20 @@ const styles = StyleSheet.create({
         borderRadius: 20,
         marginRight: 12,
     },
+    avatarContainer: {
+        position: 'relative',
+    },
+    onlineIndicator: {
+        position: 'absolute',
+        bottom: 0,
+        right: 8,
+        width: 12,
+        height: 12,
+        borderRadius: 6,
+        backgroundColor: '#22c55e',
+        borderWidth: 2,
+        borderColor: '#fff',
+    },
     contentContainer: {
         flex: 1,
     },
@@ -504,5 +589,46 @@ const styles = StyleSheet.create({
     actionText: {
         fontSize: 14,
         color: '#6B6B6B',
+    },
+    // Bottom Sheet Modal Styles
+    modalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0, 0, 0, 0.5)',
+        justifyContent: 'flex-end',
+    },
+    bottomSheet: {
+        borderTopLeftRadius: 20,
+        borderTopRightRadius: 20,
+        paddingHorizontal: 20,
+        paddingBottom: 40,
+    },
+    bottomSheetHandle: {
+        width: 40,
+        height: 4,
+        borderRadius: 2,
+        alignSelf: 'center',
+        marginBottom: 16,
+    },
+    bottomSheetTitle: {
+        fontSize: 18,
+        fontWeight: '600',
+        textAlign: 'center',
+        marginBottom: 20,
+    },
+    bottomSheetOption: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 16,
+        borderBottomWidth: 1,
+        borderBottomColor: 'rgba(128, 128, 128, 0.2)',
+    },
+    bottomSheetOptionText: {
+        fontSize: 16,
+        marginLeft: 12,
+    },
+    bottomSheetCancelText: {
+        fontSize: 16,
+        textAlign: 'center',
+        paddingVertical: 16,
     },
 });

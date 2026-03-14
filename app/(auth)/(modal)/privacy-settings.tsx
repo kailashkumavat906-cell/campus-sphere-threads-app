@@ -171,9 +171,9 @@ export default function PrivacySettingsScreen() {
     router.push('/(auth)/(modal)/data-activity');
   }, [router]);
 
-  const handleFollowRequests = useCallback(() => {
+  const handleArchivePosts = useCallback(() => {
     // @ts-ignore
-    router.push('/(auth)/(modal)/follow-requests');
+    router.push('/(auth)/(modal)/archived-posts');
   }, [router]);
 
   if (isLoading) {
@@ -202,20 +202,6 @@ export default function PrivacySettingsScreen() {
         showsVerticalScrollIndicator={true}
         alwaysBounceVertical={false}
       >
-        {/* Account Privacy Section */}
-        <View style={styles.section}>
-          <Text style={[styles.sectionTitle, { color: colors.icon }]}>Account Privacy</Text>
-          
-          <PrivacyToggleRow
-            title="Private Account"
-            subtitle="Only approved followers can see your content"
-            icon="lock-closed"
-            isEnabled={settings.privateAccount}
-            onToggle={() => toggleSetting('privateAccount')}
-            colors={colors}
-          />
-        </View>
-
         {/* Activity Status Section */}
         <View style={styles.section}>
           <Text style={[styles.sectionTitle, { color: colors.icon }]}>Activity Status</Text>
@@ -226,20 +212,6 @@ export default function PrivacySettingsScreen() {
             icon="eye"
             isEnabled={settings.showOnlineStatus}
             onToggle={() => toggleSetting('showOnlineStatus')}
-            colors={colors}
-          />
-        </View>
-
-        {/* Messaging Section */}
-        <View style={styles.section}>
-          <Text style={[styles.sectionTitle, { color: colors.icon }]}>Messaging</Text>
-          
-          <PrivacyToggleRow
-            title="Allow Messages"
-            subtitle="Allow users to send you direct messages"
-            icon="mail"
-            isEnabled={settings.allowMessages}
-            onToggle={() => toggleSetting('allowMessages')}
             colors={colors}
           />
         </View>
@@ -263,14 +235,6 @@ export default function PrivacySettingsScreen() {
           <Text style={[styles.sectionTitle, { color: colors.icon }]}>Additional Options</Text>
           
           <ClickableRow
-            title="Follow Requests"
-            subtitle="See who wants to follow you"
-            icon="person-add"
-            onPress={handleFollowRequests}
-            colors={colors}
-          />
-          
-          <ClickableRow
             title="Blocked Users"
             subtitle="Manage blocked accounts"
             icon="person-remove"
@@ -283,6 +247,14 @@ export default function PrivacySettingsScreen() {
             subtitle="Manage your data and activity"
             icon="analytics"
             onPress={handleDataActivity}
+            colors={colors}
+          />
+          
+          <ClickableRow
+            title="Archive Posts"
+            subtitle="View and manage archived posts"
+            icon="archive"
+            onPress={handleArchivePosts}
             colors={colors}
           />
         </View>

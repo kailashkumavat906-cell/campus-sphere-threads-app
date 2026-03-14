@@ -1,8 +1,8 @@
-import { useNotificationSettings } from '@/hooks/useNotificationSettings';
 import { useThemeContext } from '@/hooks/ThemeContext';
+import { useNotificationSettings } from '@/hooks/useNotificationSettings';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { useCallback, useState, useRef } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
@@ -92,7 +92,7 @@ function AnimatedSwitch({
 }
 
 export default function NotificationSettingsScreen() {
-  const { top } = useSafeAreaInsets();
+  const insets = useSafeAreaInsets();
   const router = useRouter();
   const { colors } = useThemeContext();
   const { notificationsEnabled, isLoading, toggleNotifications } = useNotificationSettings();
@@ -112,7 +112,7 @@ export default function NotificationSettingsScreen() {
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       {/* Header - Fixed at top */}
-      <View style={[styles.header, { paddingTop: top + 14 }]}>
+      <View style={[styles.header, { paddingTop: insets.top + 14 }]}>
         <TouchableOpacity style={styles.backButton} onPress={handleGoBack} accessibilityLabel="Back">
           <Ionicons name="arrow-back" size={24} color={colors.text} />
         </TouchableOpacity>
@@ -127,7 +127,7 @@ export default function NotificationSettingsScreen() {
         showsVerticalScrollIndicator={true}
         alwaysBounceVertical={false}
       >
-        {/* Main Toggle */}
+        {/* Main Toggle - Only notification setting */}
         <View style={[styles.section, { backgroundColor: colors.cardBackground }]}>
           <View style={styles.row}>
             <View style={styles.labelContainer}>
@@ -155,87 +155,19 @@ export default function NotificationSettingsScreen() {
           </View>
         </View>
 
-        {/* Notification Types */}
-        {notificationsEnabled && (
-          <View style={styles.section}>
-            <Text style={[styles.sectionTitle, { color: colors.icon }]}>Notification Types</Text>
-            
-            <ToggleRow
-              title="Likes"
-              subtitle="When someone likes your posts"
-              icon="heart"
-              colors={colors}
-            />
-            
-            <ToggleRow
-              title="Comments"
-              subtitle="When someone comments on your posts"
-              icon="chatbubble"
-              colors={colors}
-            />
-            
-            <ToggleRow
-              title="Follows"
-              subtitle="When someone follows you"
-              icon="person-add"
-              colors={colors}
-            />
-          </View>
-        )}
-
         {/* Info Section */}
         <View style={styles.infoSection}>
           <Ionicons name="information-circle" size={20} color={colors.icon} />
           <Text style={[styles.infoText, { color: colors.icon }]}>
-            You can customize which notifications you receive in your device settings.
+            {notificationsEnabled 
+              ? 'You will receive push notifications for activity on your posts.'
+              : 'Turn on notifications to receive updates about activity on your posts.'}
           </Text>
         </View>
 
         {/* Bottom padding for safe area */}
         <View style={styles.bottomPadding} />
       </ScrollView>
-    </View>
-  );
-}
-
-// Toggle Row Component with Animated Switch
-function ToggleRow({ 
-  title, 
-  subtitle, 
-  icon,
-  colors 
-}: { 
-  title: string; 
-  subtitle: string; 
-  icon: string;
-  colors: any;
-}) {
-  const [isEnabled, setIsEnabled] = useState(true);
-
-  const handleToggle = () => {
-    setIsEnabled(!isEnabled);
-  };
-
-  return (
-    <View style={styles.toggleRow}>
-      <TouchableOpacity
-        style={styles.labelContainer}
-        onPress={handleToggle}
-        accessibilityRole="button"
-        activeOpacity={0.7}
-      >
-        <Ionicons name={icon as any} size={22} color={colors.text} />
-        <View style={styles.textContainer}>
-          <Text style={[styles.rowTitle, { color: colors.text }]}>{title}</Text>
-          <Text style={[styles.rowSubtitle, { color: colors.icon }]}>{subtitle}</Text>
-        </View>
-      </TouchableOpacity>
-      
-      <AnimatedSwitch 
-        isEnabled={isEnabled} 
-        onToggle={handleToggle}
-        size="small"
-      />
     </View>
   );
 }

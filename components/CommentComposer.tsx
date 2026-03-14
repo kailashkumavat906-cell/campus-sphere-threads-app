@@ -4,19 +4,23 @@ import { useThemeColors } from '@/hooks/useThemeColor';
 import { useUserProfile } from '@/hooks/useUserProfile';
 import { Ionicons } from '@expo/vector-icons';
 import { useMutation, useQuery } from 'convex/react';
+import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import { ActivityIndicator, Alert, FlatList, Image, Share, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 
 type CommentComposerProps = {
     threadId: Id<'messages'>;
     showThread?: boolean;
+    initialShowComments?: boolean;
 };
 
-const CommentComposer: React.FC<CommentComposerProps> = ({ threadId, showThread = false }) => {
+const CommentComposer: React.FC<CommentComposerProps> = ({ threadId, showThread = false, initialShowComments = false }) => {
     const [commentContent, setCommentContent] = useState('');
     const [replyingToId, setReplyingToId] = useState<string | null>(null);
     const [replyingToName, setReplyingToName] = useState<string>('');
+    const [commentKey, setCommentKey] = useState(0); // Force refresh comments
     const { userProfile } = useUserProfile();
+    const router = useRouter();
     const addThread = useMutation(api.messages.addThread);
     const toggleLike = useMutation(api.messages.toggleLike);
     const comments = useQuery(api.messages.getThreadComments, { messageId: threadId });
@@ -26,18 +30,26 @@ const CommentComposer: React.FC<CommentComposerProps> = ({ threadId, showThread 
     // Track local like states
     const [likedComments, setLikedComments] = useState<Set<string>>(new Set());
     const [likeCounts, setLikeCounts] = useState<Record<string, number>>({});
+    const [showComments, setShowComments] = useState(initialShowComments);
 
     const handleSubmit = async () => {
         if (commentContent.trim() === '') return;
         
-        await addThread({
-            threadId,
-            content: commentContent,
-            parentId: replyingToId as Id<'messages'> | undefined,
-        });
-        setCommentContent('');
-        setReplyingToId(null);
-        setReplyingToName('');
+        try {
+            await addThread({
+                threadId: threadId as any,
+                content: commentContent,
+                parentId: replyingToId ? (replyingToId as Id<'messages'>) : undefined,
+            });
+            setCommentContent('');
+            setReplyingToId(null);
+            setReplyingToName('');
+            // Force refresh comments list
+            setCommentKey(prev => prev + 1);
+        } catch (error) {
+            console.error('[CommentComposer] Error posting comment:', error);
+            Alert.alert('Error', 'Failed to post comment. Please try again.');
+        }
     };
 
     const handleLike = async (commentId: string, currentLiked: boolean, currentCount: number) => {
@@ -68,6 +80,11 @@ const CommentComposer: React.FC<CommentComposerProps> = ({ threadId, showThread 
     const handleReply = (commentId: string, username: string) => {
         setReplyingToId(commentId);
         setReplyingToName(username);
+    };
+
+    // Navigate to user profile
+    const handleUserPress = (clerkId: string) => {
+        router.push(`/profile?clerkId=${clerkId}`);
     };
 
     const handleShare = async (commentContent: string, username: string) => {
@@ -105,15 +122,19 @@ const CommentComposer: React.FC<CommentComposerProps> = ({ threadId, showThread 
 
         return (
             <View key={item._id} style={[styles.commentItem, isReply && styles.replyCommentItem]}>
-                <Image
-                    source={{ uri: item.creator?.imageUrl || 'https://via.placeholder.com/40' }}
-                    style={[styles.commentAvatar, isReply && styles.replyAvatar]}
-                />
+                <TouchableOpacity onPress={() => handleUserPress(item.creator?.clerkId)}>
+                    <Image
+                        source={{ uri: item.creator?.imageUrl || 'https://via.placeholder.com/40' }}
+                        style={[styles.commentAvatar, isReply && styles.replyAvatar]}
+                    />
+                </TouchableOpacity>
                 <View style={styles.commentContent}>
                     <View style={styles.commentHeader}>
-                        <Text style={[styles.commentUsername, { color: colors.text }]}>
-                            {username}
-                        </Text>
+                        <TouchableOpacity onPress={() => handleUserPress(item.creator?.clerkId)}>
+                            <Text style={[styles.commentUsername, { color: colors.text}]}>
+                                {username}
+                            </Text>
+                        </TouchableOpacity>
                         <Text style={[styles.commentTime, { color: colors.icon }]}>
                             · {new Date(item._creationTime).toLocaleDateString()}
                         </Text>
@@ -142,15 +163,7 @@ const CommentComposer: React.FC<CommentComposerProps> = ({ threadId, showThread 
                             style={styles.commentAction}
                             onPress={() => handleReply(item._id, item.creator?.username || username)}
                         >
-                            <Ionicons name="chatbubble-outline" size={16} color={colors.icon} />
-                        </TouchableOpacity>
-                        
-                        {/* Share button */}
-                        <TouchableOpacity 
-                            style={styles.commentAction}
-                            onPress={() => handleShare(item.content, username)}
-                        >
-                            <Ionicons name="send" size={16} color={colors.icon} />
+                            <Text style={[styles.replyText, { color: colors.icon }]}>Reply</Text>
                         </TouchableOpacity>
                     </View>
                 </View>
@@ -160,9 +173,18 @@ const CommentComposer: React.FC<CommentComposerProps> = ({ threadId, showThread 
 
     // Render comment with its replies
     const renderCommentWithReplies = ({ item }: { item: any }) => {
+        const replyCount = item.replies ? item.replies.length : 0;
         return (
             <View>
                 {renderCommentItem(item, false)}
+                {/* Show reply count for top-level comments with replies */}
+                {replyCount > 0 && (
+                    <View style={styles.replyCountContainer}>
+                        <Text style={[styles.replyCountText, { color: colors.icon }]}>
+                            💬 {replyCount} {replyCount === 1 ? 'reply' : 'replies'}
+                        </Text>
+                    </View>
+                )}
                 {/* Render nested replies */}
                 {item.replies && item.replies.length > 0 && (
                     <View style={styles.repliesContainer}>
@@ -208,20 +230,30 @@ const CommentComposer: React.FC<CommentComposerProps> = ({ threadId, showThread 
                 </View>
             )}
 
-            {/* Comments List */}
-            <FlatList
-                data={comments}
-                keyExtractor={(item) => item._id}
-                renderItem={renderCommentWithReplies}
-                ListEmptyComponent={
-                    <View style={styles.emptyContainer}>
-                        <Text style={[styles.emptyTitle, { color: colors.text }]}>No comments yet</Text>
-                        <Text style={[styles.emptySubtitle, { color: colors.icon }]}>Be the first to share what you think</Text>
-                    </View>
-                }
-                contentContainerStyle={styles.commentsList}
-                showsVerticalScrollIndicator={false}
-            />
+            {/* Comments Section - Only show when showComments is true */}
+            {showComments ? (
+                <FlatList
+                    data={comments}
+                    key={commentKey}
+                    keyExtractor={(item) => item._id}
+                    renderItem={renderCommentWithReplies}
+                    ListEmptyComponent={
+                        <View style={styles.emptyContainer}>
+                            <Text style={[styles.emptyTitle, { color: colors.text }]}>No comments yet</Text>
+                            <Text style={[styles.emptySubtitle, { color: colors.icon }]}>Be the first to share what you think</Text>
+                        </View>
+                    }
+                    contentContainerStyle={styles.commentsList}
+                    showsVerticalScrollIndicator={false}
+                />
+            ) : (
+                <TouchableOpacity 
+                    style={styles.viewCommentsButton}
+                    onPress={() => setShowComments(true)}
+                >
+                    <Text style={[styles.viewCommentsText, { color: colors.icon }]}>View comments</Text>
+                </TouchableOpacity>
+            )}
 
             {/* Input */}
             <View style={[styles.inputContainer, { borderTopColor: colors.border }]}>
@@ -300,6 +332,16 @@ const styles = StyleSheet.create({
     commentsList: {
         flexGrow: 1,
     },
+    viewCommentsButton: {
+        paddingVertical: 16,
+        paddingHorizontal: 16,
+        borderTopWidth: StyleSheet.hairlineWidth,
+        borderTopColor: '#DBDBDB',
+    },
+    viewCommentsText: {
+        fontSize: 14,
+        fontWeight: '500',
+    },
     emptyContainer: {
         flex: 1,
         justifyContent: 'center',
@@ -349,17 +391,22 @@ const styles = StyleSheet.create({
     },
     commentActions: {
         flexDirection: 'row',
-        gap: 20,
+        gap: 12,
+        marginTop: 4,
     },
     commentAction: {
         flexDirection: 'row',
         alignItems: 'center',
         gap: 4,
-        padding: 2,
+        padding: 4,
     },
     actionCount: {
         fontSize: 12,
         marginLeft: 2,
+    },
+    replyText: {
+        fontSize: 12,
+        fontWeight: '500',
     },
     // Reply/Nested comment styles
     repliesContainer: {
@@ -367,6 +414,14 @@ const styles = StyleSheet.create({
         paddingLeft: 12,
         borderLeftWidth: 2,
         borderLeftColor: '#E0E0E0',
+    },
+    replyCountContainer: {
+        paddingLeft: 52,
+        paddingVertical: 8,
+    },
+    replyCountText: {
+        fontSize: 13,
+        fontWeight: '500',
     },
     replyCommentItem: {
         paddingVertical: 8,

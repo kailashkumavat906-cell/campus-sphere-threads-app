@@ -1,6 +1,6 @@
 import { api } from '@/convex/_generated/api';
 import { useThemeContext } from '@/hooks/ThemeContext';
-import { useOAuth, useSignIn, useUser } from '@clerk/clerk-expo';
+import { useAuth, useOAuth, useSignIn, useUser } from '@clerk/clerk-expo';
 import { Ionicons } from '@expo/vector-icons';
 import { useMutation } from 'convex/react';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -31,6 +31,7 @@ export default function LoginScreen() {
   const { signIn, setActive, isLoaded } = useSignIn();
   const { startOAuthFlow: startGoogleOAuthFlow } = useOAuth({ strategy: 'oauth_google' });
   const { user: clerkUser } = useUser();
+  const { signOut } = useAuth();
   const syncUserToConvex = useMutation(api.users.syncUser);
   
   // Theme context
@@ -42,9 +43,36 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState<{ email?: string; password?: string }>({});
 
+  // Password validation state - individual requirements
+  const [passwordRequirements, setPasswordRequirements] = useState({
+    minLength: false,
+    uppercase: false,
+    number: false,
+    specialChars: false,
+  });
+
   const validateEmail = (email: string): boolean => {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     return emailRegex.test(email);
+  };
+
+  // Update individual password requirements as user types
+  const updatePasswordRequirements = (pwd: string) => {
+    const specialChars = pwd.match(/[!@#$%^&*]/g) || [];
+    setPasswordRequirements({
+      minLength: pwd.length >= 8,
+      uppercase: /[A-Z]/.test(pwd),
+      number: /[0-9]/.test(pwd),
+      specialChars: specialChars.length >= 2,
+    });
+  };
+
+  // Check if all password requirements are met
+  const isPasswordValid = (): boolean => {
+    return passwordRequirements.minLength && 
+           passwordRequirements.uppercase && 
+           passwordRequirements.number && 
+           passwordRequirements.specialChars;
   };
 
   const validateFields = (): boolean => {
@@ -58,8 +86,6 @@ export default function LoginScreen() {
     
     if (!password) {
       newErrors.password = 'Password is required';
-    } else if (password.length < 6) {
-      newErrors.password = 'Password must be at least 6 characters';
     }
     
     setErrors(newErrors);
@@ -123,10 +149,11 @@ export default function LoginScreen() {
         Alert.alert('Error', 'Sign in was not completed. Please try again.');
       }
     } catch (error: any) {
-      console.error('Login error:', error);
-      console.log('Full error:', JSON.stringify(error, null, 2));
-      const errorMessage = error?.errors?.[0]?.message || error?.message || 'Failed to login. Please check your credentials.';
-      Alert.alert('Login Error', errorMessage);
+      // Show user-friendly error message
+      Alert.alert(
+        'Login Failed',
+        'Incorrect email or password. Please try again.'
+      );
     } finally {
       setLoading(false);
     }
@@ -158,7 +185,7 @@ export default function LoginScreen() {
     if (!email.trim()) {
       Alert.alert(
         'Reset Password',
-        'Please enter your email address first, then click "Forgot Password" to receive a password reset link.',
+        'Please enter your email address first, then click "Forgot Password" to receive a password reset code.',
         [{ text: 'OK' }]
       );
       return;
@@ -171,39 +198,47 @@ export default function LoginScreen() {
 
     try {
       setLoading(true);
+      
+      // Sign out if user is already signed in
+      await signOut();
+      
+      // Small delay to ensure sign out completes
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
       // Use Clerk's signIn.create with reset password strategy
       await signIn.create({
         identifier: email,
         strategy: 'reset_password_email_code',
       });
-      Alert.alert(
-        'Password Reset',
-        'A password reset code has been sent to your email. Check your inbox to reset your password.',
-        [{ text: 'OK' }]
-      );
+      
+      // Navigate to reset password screen with email
+      router.push({
+        pathname: '/login/reset-password',
+        params: { email }
+      });
     } catch (error: any) {
       console.error('Password reset error:', error);
-      Alert.alert(
-        'Reset Password',
-        'Would you like to reset your password through Clerk?',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { 
-            text: 'Continue', 
-            onPress: () => {
-              Alert.alert(
-                'Password Reset',
-                'Please visit the Clerk dashboard or use the password reset link sent to your email.',
-                [{ text: 'OK' }]
-              );
-            }
-          }
-        ]
-      );
+      
+      // Check if user is already signed in
+      if (error?.message?.includes('already signed in')) {
+        Alert.alert(
+          'Error',
+          'You are currently signed in. Please sign out first to reset your password.',
+          [
+            { text: 'OK' }
+          ]
+        );
+      } else {
+        Alert.alert(
+          'Error',
+          'Failed to send verification code. Please check your email address and try again.',
+          [{ text: 'OK' }]
+        );
+      }
     } finally {
       setLoading(false);
     }
-  }, [email, signIn, isLoaded]);
+  }, [email, signIn, isLoaded, router, signOut]);
 
   const handleNavigateToSignUp = useCallback(() => {
     router.push('/signup');
@@ -218,7 +253,7 @@ export default function LoginScreen() {
       
       {/* Gradient Background */}
       <View style={[styles.gradientBackground, { backgroundColor: colors.authBackground }]}>
-        <View style={[styles.gradientOverlay, { backgroundColor: colors.authBackgroundOverlay }]} />
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: colors.authBackgroundOverlay }]} />
       </View>
 
       <View style={styles.content}>
@@ -324,16 +359,16 @@ export default function LoginScreen() {
             {/* Log In Button with Gradient */}
             <TouchableOpacity 
               onPress={handleEmailLogin}
-              disabled={loading}
+              disabled={loading || !email.trim() || !password}
               accessibilityLabel="Log in button"
               accessibilityRole="button"
               activeOpacity={0.8}
             >
               <LinearGradient
-                colors={colors.authGradient as any}
+                colors={(!email.trim() || !password) ? ['#9ca3af', '#9ca3af'] : (colors.authGradient as any)}
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 0 }}
-                style={styles.loginButton}
+                style={[styles.loginButton, (!email.trim() || !password) && styles.loginButtonDisabled]}
               >
                 {loading ? (
                   <ActivityIndicator color={colors.authButtonText} />
@@ -397,22 +432,19 @@ const styles = StyleSheet.create({
   },
   gradientBackground: {
     ...StyleSheet.absoluteFillObject,
-  },
-  gradientOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    zIndex: -1,
   },
   content: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 24,
-    paddingVertical: 20,
   },
   card: {
     width: '100%',
     maxWidth: 400,
     borderRadius: 24,
-    padding: 32,
+    padding: 24,
     shadowColor: '#000000',
     shadowOffset: {
       width: 0,
@@ -497,9 +529,37 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 4,
   },
+  loginButtonDisabled: {
+    shadowOpacity: 0.1,
+    elevation: 2,
+  },
   loginButtonText: {
     fontSize: 16,
     fontWeight: '700',
+  },
+  passwordRequirementsContainer: {
+    marginTop: 8,
+    marginBottom: 16,
+    padding: 12,
+    backgroundColor: 'rgba(0,0,0,0.02)',
+    borderRadius: 12,
+  },
+  passwordRequirementsTitle: {
+    fontSize: 12,
+    fontWeight: '600',
+    marginBottom: 8,
+    letterSpacing: 0.5,
+  },
+  requirementRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  requirementIcon: {
+    marginRight: 8,
+  },
+  requirementText: {
+    fontSize: 13,
   },
   dividerContainer: {
     flexDirection: 'row',
@@ -542,6 +602,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginTop: 24,
+    marginBottom: 0,
   },
   bottomText: {
     fontSize: 14,

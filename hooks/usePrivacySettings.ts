@@ -5,23 +5,17 @@ import { useMutation } from 'convex/react';
 import { useCallback, useEffect, useState } from 'react';
 
 const PRIVACY_KEYS = {
-  privateAccount: 'privacy_private_account',
   showOnlineStatus: 'privacy_show_online_status',
-  allowMessages: 'privacy_allow_messages',
   allowProfileSearch: 'privacy_allow_profile_search',
 };
 
 interface PrivacySettings {
-  privateAccount: boolean;
   showOnlineStatus: boolean;
-  allowMessages: boolean;
   allowProfileSearch: boolean;
 }
 
 const defaultSettings: PrivacySettings = {
-  privateAccount: false,
   showOnlineStatus: true,
-  allowMessages: true,
   allowProfileSearch: true,
 };
 
@@ -29,7 +23,8 @@ export function usePrivacySettings() {
   const [settings, setSettings] = useState<PrivacySettings>(defaultSettings);
   const [isLoading, setIsLoading] = useState(true);
   const { userId } = useAuth();
-  const updatePrivacySetting = useMutation(api.users.updatePrivacySetting);
+  const updateShowOnlineStatus = useMutation(api.users.updateShowOnlineStatus);
+  const updateAllowProfileSearch = useMutation(api.users.updateAllowProfileSearch);
 
   // Load settings on mount
   useEffect(() => {
@@ -67,16 +62,23 @@ export function usePrivacySettings() {
       // Persist to AsyncStorage
       await AsyncStorage.setItem(PRIVACY_KEYS[key], value.toString());
       
-      // Sync private account setting with Convex backend
-      if (key === 'privateAccount' && userId) {
-        await updatePrivacySetting({ isPrivate: value });
+      // Sync show online status with Convex backend
+      if (key === 'showOnlineStatus') {
+        console.log('[PrivacySettings] Syncing showOnlineStatus to backend:', value);
+        await updateShowOnlineStatus({ showOnlineStatus: value });
+      }
+      
+      // Sync allow profile search with Convex backend
+      if (key === 'allowProfileSearch') {
+        console.log('[PrivacySettings] Syncing allowProfileSearch to backend:', value);
+        await updateAllowProfileSearch({ allowProfileSearch: value });
       }
     } catch (error) {
       console.error('Error saving privacy setting:', error);
       // Revert on error
       setSettings(prev => ({ ...prev, [key]: !value }));
     }
-  }, [userId, updatePrivacySetting]);
+  }, [updateShowOnlineStatus, updateAllowProfileSearch]);
 
   // Toggle a setting
   const toggleSetting = useCallback((key: keyof PrivacySettings) => {

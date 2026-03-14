@@ -2,16 +2,19 @@ import { api } from '@/convex/_generated/api';
 import { Id } from '@/convex/_generated/dataModel';
 import { useThemeColors } from '@/hooks/useThemeColor';
 import { useUserProfile } from '@/hooks/useUserProfile';
+import { getUserStatus } from '@/utils/userStatus';
 import { useAuth } from '@clerk/clerk-expo';
 import { useFocusEffect } from '@react-navigation/native';
 import { useMutation, useQuery } from 'convex/react';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Image, Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Image, Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 type UserProfileProps = {
   userId?: Id<"users">;
+  isBlocked?: boolean;
+  iBlockedThem?: boolean;
 };
 
 // Helper function to get display string from profile directly
@@ -24,7 +27,7 @@ const getUserDisplayString = (profile: any): string => {
   return parts.join(' · ');
 };
 
-const UserProfile = ({ userId }: UserProfileProps) => {
+const UserProfile = ({ userId, isBlocked = false, iBlockedThem = false }: UserProfileProps) => {
   const [refreshKey, setRefreshKey] = useState(0);
   const [showFullScreenImage, setShowFullScreenImage] = useState(false);
   const colors = useThemeColors();
@@ -83,6 +86,7 @@ const UserProfile = ({ userId }: UserProfileProps) => {
   const followUser = useMutation(api.users.followUser);
   const unfollowUser = useMutation(api.users.unfollowUser);
   const sendFollowRequest = useMutation(api.users.sendFollowRequest);
+  const unblockUser = useMutation(api.users.unblockUser);
   
   const handleFollowToggle = async () => {
     if (!profile?.clerkId) return;
@@ -106,6 +110,28 @@ const UserProfile = ({ userId }: UserProfileProps) => {
     }
   };
   
+  // Handle unblock user
+  const handleUnblock = async () => {
+    if (!profile?.clerkId) return;
+    try {
+      Alert.alert(
+        'Unblock User',
+        `Are you sure you want to unblock @${profile.username || 'this user'}?`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Unblock',
+            onPress: async () => {
+              await unblockUser({ blockedClerkId: profile.clerkId });
+            }
+          }
+        ]
+      );
+    } catch (error) {
+      console.error('Error unblocking user:', error);
+    }
+  };
+
   // Determine button text based on state
   const getFollowButtonText = () => {
     if (followRequestStatus?.status === 'pending') return 'Requested';
@@ -163,6 +189,13 @@ const UserProfile = ({ userId }: UserProfileProps) => {
             )}
           </Text>
           
+          {/* Online Status */}
+          {getUserStatus(profile) && (
+            <Text style={[styles.statusText, { color: '#22c55e' }]}>
+              {getUserStatus(profile)}
+            </Text>
+          )}
+          
           {/* College Details - From viewed user's profile data */}
           {getUserDisplayString(profile) && (
             <Text style={[styles.collegeInfo, { color: colors.icon }]}>
@@ -175,10 +208,16 @@ const UserProfile = ({ userId }: UserProfileProps) => {
           onPress={() => profile.imageUrl && setShowFullScreenImage(true)}
           activeOpacity={0.8}
         >
-          <Image
-            source={imageSource}
-            style={styles.profilePicture}
-          />
+          <View style={styles.avatarContainer}>
+            <Image
+              source={imageSource}
+              style={styles.profilePicture}
+            />
+            {/* Online Indicator */}
+            {profile.isOnline && profile.showOnlineStatus && (
+              <View style={styles.onlineIndicator} />
+            )}
+          </View>
         </TouchableOpacity>
       </View>
       
@@ -187,8 +226,9 @@ const UserProfile = ({ userId }: UserProfileProps) => {
       {/* Followers/Following counts - button style */}
       <View style={styles.followersContainer}>
         <TouchableOpacity 
-          onPress={navigateToFollowers} 
+          onPress={isBlocked ? undefined : navigateToFollowers} 
           style={[styles.countButton, { backgroundColor: colors.secondary }]}
+          disabled={isBlocked}
         >
           <Text style={[styles.countButtonNumber, { color: colors.text }]}>
             {followersCount}
@@ -199,8 +239,9 @@ const UserProfile = ({ userId }: UserProfileProps) => {
         </TouchableOpacity>
         
         <TouchableOpacity 
-          onPress={navigateToFollowing} 
+          onPress={isBlocked ? undefined : navigateToFollowing} 
           style={[styles.countButton, { backgroundColor: colors.secondary }]}
+          disabled={isBlocked}
         >
           <Text style={[styles.countButtonNumber, { color: colors.text }]}>
             {followingCount}
@@ -211,21 +252,22 @@ const UserProfile = ({ userId }: UserProfileProps) => {
         </TouchableOpacity>
       </View>
 
-      {/* Follow/Unfollow button - only show for other users */}
+      {/* Follow/Unblock button - only show for other users */}
       {!isOwnProfile && userId && (
         <TouchableOpacity
           style={[
             styles.followButton,
-            { backgroundColor: isFollowing ? colors.background : colors.tint },
-            isFollowing && { borderWidth: 1, borderColor: colors.border }
+            { backgroundColor: isBlocked ? colors.tint : (isFollowing ? colors.background : colors.tint) },
+            !isBlocked && isFollowing && { borderWidth: 1, borderColor: colors.border }
           ]}
-          onPress={handleFollowToggle}
+          onPress={isBlocked && iBlockedThem ? handleUnblock : handleFollowToggle}
+          disabled={isBlocked && !iBlockedThem}
         >
           <Text style={[
             styles.followButtonText,
-            { color: isFollowing ? colors.text : '#FFFFFF' }
+            { color: isBlocked ? '#FFFFFF' : (isFollowing ? colors.text : '#FFFFFF') }
           ]}>
-            {getFollowButtonText()}
+            {isBlocked ? (iBlockedThem ? 'Unblock' : 'Blocked') : getFollowButtonText()}
           </Text>
         </TouchableOpacity>
       )}
@@ -295,6 +337,24 @@ const styles = StyleSheet.create({
     width: 96,
     height: 96,
     borderRadius: 48,
+  },
+  avatarContainer: {
+    position: 'relative',
+  },
+  onlineIndicator: {
+    position: 'absolute',
+    bottom: 4,
+    right: 4,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#22c55e',
+    borderWidth: 3,
+    borderColor: '#fff',
+  },
+  statusText: {
+    fontSize: 12,
+    marginTop: 4,
   },
   bio: {
     fontSize: 16,

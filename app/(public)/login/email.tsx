@@ -44,8 +44,7 @@ export default function EmailLoginScreen() {
         Alert.alert('Error', 'Sign in was not completed. Please try again.');
       }
     } catch (error: any) {
-      console.error('Login error:', error);
-      Alert.alert('Login Error', error?.message || 'Failed to login. Please check your credentials.');
+      Alert.alert('Login Failed', 'Incorrect email or password. Please try again.');
     } finally {
       setLoading(false);
     }

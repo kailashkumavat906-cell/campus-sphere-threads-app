@@ -6,15 +6,17 @@ import { Ionicons } from '@expo/vector-icons';
 import { useMutation, useQuery } from 'convex/react';
 import { router } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { FlatList, Pressable, RefreshControl, SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { FlatList, Pressable, RefreshControl, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-type TabType = 'all' | 'comments' | 'follows';
+type TabType = 'all' | 'likes' | 'comments' | 'follows' | 'posts';
 
 const TABS: { key: TabType; label: string }[] = [
   { key: 'all', label: 'All' },
+  { key: 'likes', label: 'Likes' },
   { key: 'comments', label: 'Comments' },
   { key: 'follows', label: 'Follows' },
+  { key: 'posts', label: 'Posts' },
 ];
 
 const Page = () => {
@@ -46,6 +48,16 @@ const Page = () => {
     }
   }, [allNotificationsQuery]);
 
+  // Mark all notifications as read when screen loads
+  useEffect(() => {
+    if (user && allNotificationsQuery && allNotificationsQuery.length > 0) {
+      const hasUnread = allNotificationsQuery.some((n: any) => !n.isRead);
+      if (hasUnread) {
+        markAllAsRead({ userId: user._id });
+      }
+    }
+  }, [user, allNotificationsQuery]);
+
   // Mutations
   // @ts-ignore
   const markAsRead = useMutation(api.notifications.markAsRead);
@@ -53,18 +65,39 @@ const Page = () => {
   const markAllAsRead = useMutation(api.notifications.markAllAsRead);
   // @ts-ignore
   const createDummyNotifications = useMutation(api.notifications.createDummyNotifications);
+  // @ts-ignore
+  const followUser = useMutation(api.users.followUser);
+  // @ts-ignore
+  const unfollowUser = useMutation(api.users.unfollowUser);
+
+  // Get following list to check follow status (list of users we follow)
+  // @ts-ignore
+  const followingList = useQuery(api.users.getFollowing, clerkId ? { clerkId } : 'skip');
+
+  // Helper to check if current user follows a specific user
+  const isFollowingUser = (targetClerkId: string): boolean => {
+    if (!followingList || !targetClerkId) return false;
+    return followingList.some((f: any) => f.clerkId === targetClerkId);
+  };
 
   // Filter notifications by type
   const filteredNotifications = useMemo(() => {
     if (!notifications) return [];
     
+    // First filter out user_online notifications
+    const filtered = notifications.filter((n: any) => n.type !== 'user_online');
+    
     switch (activeTab) {
+      case 'likes':
+        return filtered.filter((n: any) => n.type === 'like');
       case 'comments':
-        return notifications.filter((n: any) => n.type === 'comment' || n.type === 'mention');
+        return filtered.filter((n: any) => n.type === 'comment' || n.type === 'mention');
       case 'follows':
-        return notifications.filter((n: any) => n.type === 'follow');
+        return filtered.filter((n: any) => n.type === 'follow');
+      case 'posts':
+        return filtered.filter((n: any) => n.type === 'new_post');
       default:
-        return notifications;
+        return filtered;
     }
   }, [notifications, activeTab]);
 
@@ -76,24 +109,48 @@ const Page = () => {
     }
   };
 
-  // Handle notification press
+  // Handle notification press - universal handler for all notification types
   const handleNotificationPress = useCallback(async (notification: any) => {
+    // Guard clause for null/undefined notification
+    if (!notification) {
+      console.log('[Notifications] Notification is null/undefined');
+      return;
+    }
+    
+    console.log('[Notifications] Handling press for notification:', notification.type, notification._id);
+    
+    // Mark as read
     if (!notification.isRead) {
       await markAsRead({ notificationId: notification._id });
     }
     
-    // Navigate based on notification type
-    if (notification.type === 'like' || notification.type === 'comment' || notification.type === 'mention') {
-      if (notification.relatedId) {
-        router.push(`/(auth)/(modal)/reply/${notification.relatedId}`);
+    // Get the postId - prefer postId, fallback to relatedId
+    const postId = notification.postId || notification.relatedId;
+    
+    // ONLY allow navigation for follow notifications
+    // All other notification types are non-interactive
+    if (notification.type === 'follow') {
+      if (notification.senderId) {
+        router.push(`/profile?clerkId=${notification.senderId}`);
       }
     }
-  }, [markAsRead]);
+    // Like, comment, reply, post, mention notifications - no action on tap
+    // They are display-only in the list
+  }, [markAsRead, router]);
 
-  // Handle follow back
-  const handleFollowBack = useCallback((senderId: string) => {
-    console.log('Follow back:', senderId);
-  }, []);
+  // Handle follow back (follow/unfollow)
+  const handleFollowBack = useCallback(async (senderId: string) => {
+    // Check if already following using the helper function
+    const isAlreadyFollowing = isFollowingUser(senderId);
+    
+    if (isAlreadyFollowing) {
+      // Unfollow
+      await unfollowUser({ userId: senderId });
+    } else {
+      // Follow
+      await followUser({ userId: senderId });
+    }
+  }, [followUser, unfollowUser, isFollowingUser]);
 
   // Handle mark all as read
   const handleMarkAllAsRead = useCallback(async () => {
@@ -116,16 +173,23 @@ const Page = () => {
   }, [createDummyNotifications, user]);
 
   // Render notification item
-  const renderItem = ({ item }: { item: any }) => (
-    <>
-      <NotificationItem
-        notification={item}
-        onPress={handleNotificationPress}
-        onFollowBack={handleFollowBack}
-      />
-      <View style={[styles.separator, { backgroundColor: colors.border }]} />
-    </>
-  );
+  const renderItem = ({ item }: { item: any }) => {
+    // Check if current user follows this person using helper function
+    const isFollowing = isFollowingUser(item.senderId);
+    
+    return (
+      <>
+        <NotificationItem
+          notification={item}
+          onPress={handleNotificationPress}
+          onFollowBack={handleFollowBack}
+          isFollowing={isFollowing}
+          currentUserClerkId={clerkId || undefined}
+        />
+        <View style={[styles.separator, { backgroundColor: colors.border }]} />
+      </>
+    );
+  };
 
   // Render empty state
   const renderEmpty = () => (
@@ -151,59 +215,59 @@ const Page = () => {
   }
 
   return (
-    <SafeAreaView style={[styles.safeArea, { backgroundColor: colors.background }]}>
-      <View style={{ flex: 1, backgroundColor: colors.background, paddingTop: insets.top }} key={tabKey}>
-        {/* Header */}
-        <View style={[styles.headerContainer, { backgroundColor: colors.background }]}>
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      {/* Header with Back Arrow and Title */}
+      <View style={[styles.header, { paddingTop: insets.top + 4 }]}>
+        <View style={styles.headerSide}>
           <Pressable 
             onPress={() => router.back()} 
             style={styles.backButton}
           >
             <Ionicons name="arrow-back" size={24} color={colors.text} />
           </Pressable>
-          
-          <Text style={[styles.headerTitle, { color: colors.text }]}>Notifications</Text>
-          
-          <Pressable 
-            onPress={handleCreateDummyData}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <Ionicons name="add-circle-outline" size={24} color={colors.tint} />
-          </Pressable>
-        </View>
-
-        {/* Tab Buttons */}
-        <View style={[styles.tabContainer, { borderBottomColor: colors.border }]}>
-          <View style={styles.tabList}>
-            {TABS.map((tab) => (
-              <TouchableOpacity 
-                key={tab.key}
-                style={styles.tabButton}
-                onPress={() => handleTabChange(tab.key)}
-                activeOpacity={0.7}
-              >
-                <Text style={[
-                  styles.tabText, 
-                  activeTab === tab.key ? styles.activeTabText : styles.inactiveTabText,
-                  { color: activeTab === tab.key ? colors.text : colors.icon }
-                ]}>
-                  {tab.label}
-                </Text>
-                {activeTab === tab.key && (
-                  <View style={[styles.activeTabIndicator, { backgroundColor: colors.tint }]} />
-                )}
-              </TouchableOpacity>
-            ))}
-          </View>
         </View>
         
-        <FlatList
+        <View style={styles.headerCenter}>
+          <Text style={[styles.headerTitle, { color: colors.text }]}>Notifications</Text>
+        </View>
+        
+        <View style={styles.headerSide} />
+      </View>
+
+      {/* Tab Buttons */}
+      <View style={[styles.tabContainer, { borderBottomColor: colors.border }]}>
+        <View style={styles.tabList}>
+          {TABS.map((tab) => (
+            <TouchableOpacity 
+              key={tab.key}
+              style={styles.tabButton}
+              onPress={() => handleTabChange(tab.key)}
+              activeOpacity={0.7}
+            >
+              <Text style={[
+                styles.tabText, 
+                activeTab === tab.key ? styles.activeTabText : styles.inactiveTabText,
+                { color: activeTab === tab.key ? colors.tint : colors.icon }
+              ]}>
+                {tab.label}
+              </Text>
+              {activeTab === tab.key && (
+                <View style={[styles.activeTabIndicator, { backgroundColor: colors.tint }]} />
+              )}
+            </TouchableOpacity>
+          ))}
+        </View>
+      </View>
+      
+      <FlatList
           data={filteredNotifications}
           renderItem={renderItem}
           keyExtractor={(item) => item._id}
           onEndReached={() => {}}
           onEndReachedThreshold={0.5}
           contentContainerStyle={styles.listContent}
+          style={{ flex: 1 }}
+          ListHeaderComponent={null}
           showsVerticalScrollIndicator={false}
           ListEmptyComponent={renderEmpty}
           ListFooterComponent={
@@ -220,48 +284,51 @@ const Page = () => {
             />
           }
         />
-      </View>
-    </SafeAreaView>
+    </View>
   );
 };
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-  },
   container: {
     flex: 1,
   },
-  headerContainer: {
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingTop: 12,
+    paddingHorizontal: 16,
     paddingBottom: 8,
   },
   backButton: {
     padding: 4,
   },
+  headerSide: {
+    width: 40,
+    alignItems: 'flex-start',
+  },
+  headerCenter: {
+    flex: 1,
+    alignItems: 'center',
+  },
   headerTitle: {
     fontSize: 18,
-    fontWeight: '700',
+    fontWeight: '600',
   },
   tabContainer: {
+    flexDirection: 'row',
     borderBottomWidth: 1,
-    paddingHorizontal: 20,
-    paddingVertical: 10,
+    marginTop: 8,
   },
   tabList: {
     flexDirection: 'row',
-    gap: 28,
+    paddingHorizontal: 16,
+    gap: 24,
   },
   tabButton: {
-    paddingVertical: 10,
-    paddingHorizontal: 4,
+    paddingVertical: 12,
     alignItems: 'center',
     position: 'relative',
-    minWidth: 60,
+    minWidth: 50,
   },
   tab: {
     // Not used - keeping for compatibility
@@ -270,7 +337,7 @@ const styles = StyleSheet.create({
     // Not used - keeping for compatibility
   },
   tabText: {
-    fontSize: 15,
+    fontSize: 14,
   },
   inactiveTabText: {
     fontWeight: '400',
@@ -280,22 +347,22 @@ const styles = StyleSheet.create({
   },
   activeTabIndicator: {
     position: 'absolute',
-    bottom: -4,
-    left: 0,
-    right: 0,
+    bottom: 0,
+    left: '20%',
+    right: '20%',
     height: 3,
-    borderRadius: 1.5,
+    borderRadius: 2,
   },
   separator: {
     height: 1,
-    marginLeft: 64,
+    marginLeft: 60,
   },
   loadingFooter: {
     padding: 20,
   },
   listContent: {
     flexGrow: 1,
-    justifyContent: 'center',
+    minHeight: '100%',
   },
   emptyContainer: {
     flex: 1,

@@ -2,6 +2,7 @@ import AppLoading from "@/components/AppLoading";
 import { api } from "@/convex/_generated/api";
 import { ThemeProvider } from "@/hooks/ThemeContext";
 import { tokenCache } from "@/utils/cache";
+import { getDeviceInfo } from "@/utils/device";
 import { ClerkLoaded, ClerkProvider, useAuth, useUser } from "@clerk/clerk-expo";
 import { ConvexReactClient, useMutation } from "convex/react";
 import { ConvexProviderWithClerk } from "convex/react-clerk";
@@ -24,45 +25,69 @@ LogBox.ignoreLogs([
   "Clerk: Clerk has been loaded with development keys",
 ]);
 
+// Ignore all logs in production to prevent developer error messages from showing to users
+LogBox.ignoreAllLogs(true);
+
 function InitialLayout(): ReactNode {
   const { isLoaded, isSignedIn } = useAuth();
   const { user } = useUser();
   const segments = useSegments();
   const router = useRouter();
   const [isAppReady, setIsAppReady] = useState(false);
+  const [hasSyncedUser, setHasSyncedUser] = useState(false);
 
   const syncUser = useMutation(api.users.syncUser);
+  const createSession = useMutation(api.sessions.createSession);
 
   // Wait for app to be ready
   const handleAppReady = () => {
     setIsAppReady(true);
   };
 
-  // Sync user to Convex when signed in
+  // Sync user to Convex when signed in - only once per sign-in
   useEffect(() => {
-    if (isLoaded && isSignedIn && user) {
-      console.log('=== SYNCING USER TO CONVEX ===');
-      console.log('user.id:', user.id);
-      console.log('user.imageUrl:', user.imageUrl);
-      console.log('user.primaryEmailAddress:', user.primaryEmailAddress?.emailAddress);
-      console.log('user.firstName:', user.firstName);
-      console.log('user.lastName:', user.lastName);
-      
-      syncUser({
-        clerkId: user.id,
-        email: user.primaryEmailAddress?.emailAddress || "",
-        imageUrl: user.imageUrl || undefined,
-        first_name: user.firstName || undefined,
-        last_name: user.lastName || undefined,
-      })
-        .then((result) => {
-          console.log('User synced successfully, result:', result);
-        })
-        .catch((error) => {
-          console.error('Failed to sync user:', error);
+    if (!isLoaded || !isSignedIn || !user || hasSyncedUser) return;
+
+    console.log('=== SYNCING USER TO CONVEX ===');
+    console.log('user.id:', user.id);
+    console.log('user.imageUrl:', user.imageUrl);
+    console.log('user.primaryEmailAddress:', user.primaryEmailAddress?.emailAddress);
+    console.log('user.firstName:', user.firstName);
+    console.log('user.lastName:', user.lastName);
+    
+    // Get device info inside useEffect to avoid SSR issues
+    const deviceInfo = getDeviceInfo();
+    
+    // Set flag immediately to prevent re-runs
+    setHasSyncedUser(true);
+    
+    syncUser({
+      clerkId: user.id,
+      email: user.primaryEmailAddress?.emailAddress || "",
+      imageUrl: user.imageUrl || undefined,
+      first_name: user.firstName || undefined,
+      last_name: user.lastName || undefined,
+    })
+      .then((result) => {
+        console.log('User synced successfully, result:', result);
+        
+        // Create session after user is synced
+        return createSession({
+          clerkId: user.id,
+          deviceName: deviceInfo.deviceName,
+          deviceType: deviceInfo.deviceType,
+          deviceInfo: deviceInfo.deviceInfo,
         });
-    }
-  }, [isLoaded, isSignedIn, user, syncUser]);
+      })
+      .then((sessionResult) => {
+        console.log('Session created successfully:', sessionResult);
+      })
+      .catch((error) => {
+        console.error('Failed to sync user or create session:', error);
+        // Reset flag on error to allow retry
+        setHasSyncedUser(false);
+      });
+  }, [isLoaded, isSignedIn, user, syncUser, createSession, hasSyncedUser]);
 
   // ✅ AUTH GUARD (TYPED)
   useEffect(() => {
@@ -80,6 +105,27 @@ function InitialLayout(): ReactNode {
       }
     }
   }, [isLoaded, isSignedIn, segments, router]);
+
+  // Update session lastActive periodically when user is signed in
+  const updateLastActive = useMutation(api.sessions.updateLastActiveByClerkId);
+  
+  useEffect(() => {
+    if (!isSignedIn || !user) return;
+    
+    // Update lastActive every 5 minutes
+    const interval = setInterval(() => {
+      updateLastActive({ clerkId: user.id }).catch(console.error);
+    }, 5 * 60 * 1000);
+    
+    // Also update immediately when the app comes to foreground
+    const handleAppForeground = () => {
+      updateLastActive({ clerkId: user.id }).catch(console.error);
+    };
+    
+    return () => {
+      clearInterval(interval);
+    };
+  }, [isSignedIn, user, updateLastActive]);
 
   // Show AppLoading until app is ready
   if (!isAppReady) {

@@ -1,14 +1,22 @@
+import { api } from '@/convex/_generated/api';
 import { useAuth, useUser } from '@clerk/clerk-expo';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useMutation, useQuery } from 'convex/react';
 import { useCallback, useEffect, useState } from 'react';
 
 const NOTIFICATIONS_ENABLED_KEY = 'notifications_enabled';
 
 export function useNotificationSettings() {
-  const { isLoaded: isAuthLoaded, isSignedIn, getToken } = useAuth();
+  const { isLoaded: isAuthLoaded, isSignedIn } = useAuth();
   const { user, isLoaded: isUserLoaded } = useUser();
   const [notificationsEnabled, setNotificationsEnabled] = useState<boolean>(true);
   const [isLoading, setIsLoading] = useState(true);
+  
+  // Use the existing convex mutation to update notification settings
+  const updateNotificationSetting = useMutation(api.users.updateNotificationSettings);
+  
+  // Query to get current notification settings from database
+  const dbSettings = useQuery(api.users.getNotificationSettings);
 
   // Load notification setting on mount
   useEffect(() => {
@@ -16,12 +24,10 @@ export function useNotificationSettings() {
       try {
         setIsLoading(true);
         
-        // If user is signed in, try to get from Clerk metadata first
-        if (isSignedIn && user?.publicMetadata?.notificationsEnabled !== undefined) {
-          const clerkValue = user.publicMetadata.notificationsEnabled as boolean;
-          setNotificationsEnabled(clerkValue);
-          // Also save to AsyncStorage for offline access
-          await AsyncStorage.setItem(NOTIFICATIONS_ENABLED_KEY, clerkValue.toString());
+        // First try to use database settings
+        if (dbSettings !== undefined && dbSettings !== null) {
+          setNotificationsEnabled(dbSettings.enableNotifications ?? true);
+          await AsyncStorage.setItem(NOTIFICATIONS_ENABLED_KEY, (dbSettings.enableNotifications ?? true).toString());
         } else {
           // Fallback to AsyncStorage
           const storedValue = await AsyncStorage.getItem(NOTIFICATIONS_ENABLED_KEY);
@@ -43,33 +49,30 @@ export function useNotificationSettings() {
     if (isAuthLoaded && isUserLoaded) {
       loadSettings();
     }
-  }, [isAuthLoaded, isUserLoaded, isSignedIn, user?.publicMetadata]);
+  }, [isAuthLoaded, isUserLoaded, dbSettings]);
 
-  // Toggle notifications
+  // Toggle notifications - now saves to both AsyncStorage and Convex database
   const toggleNotifications = useCallback(async () => {
     try {
       const newValue = !notificationsEnabled;
+      
+      // Update state immediately for responsive UI
       setNotificationsEnabled(newValue);
       
-      // Save to AsyncStorage
+      // Save to AsyncStorage for offline access
       await AsyncStorage.setItem(NOTIFICATIONS_ENABLED_KEY, newValue.toString());
       
-      // If user is signed in, also update Clerk metadata
-      if (isSignedIn && user) {
-        try {
-          // Note: For Clerk metadata updates, you would typically use the Clerk API
-          // This is a client-side update attempt - actual implementation may vary
-          console.log('Would update Clerk metadata for notifications:', newValue);
-        } catch (clerkError) {
-          console.error('Error updating Clerk metadata:', clerkError);
-        }
+      // Update Convex database if user is signed in
+      if (isSignedIn) {
+        await updateNotificationSetting({ enableNotifications: newValue });
+        console.log('Notification setting updated in database:', newValue);
       }
     } catch (error) {
       console.error('Error saving notification setting:', error);
       // Revert on error
       setNotificationsEnabled(!notificationsEnabled);
     }
-  }, [notificationsEnabled, isSignedIn, user]);
+  }, [notificationsEnabled, isSignedIn, updateNotificationSetting]);
 
   return {
     notificationsEnabled,

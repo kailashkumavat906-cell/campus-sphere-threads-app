@@ -2,8 +2,74 @@ import { paginationOptsValidator } from 'convex/server';
 import { v } from 'convex/values';
 import { api } from './_generated/api';
 import { Id } from './_generated/dataModel';
-import { action, mutation, query, QueryCtx } from './_generated/server';
-import { getCurrentUserOrThrow } from './users';
+import { action, mutation, MutationCtx, query, QueryCtx } from './_generated/server';
+import { getCurrentUser, getCurrentUserOrThrow } from './users';
+
+// Helper function to create a notification (needs mutation context for insert)
+const createNotification = async (
+  ctx: MutationCtx,
+  receiverId: Id<'users'>,
+  senderId: string, 
+  senderUsername: string,
+  senderImageUrl: string | undefined,
+  type: 'like' | 'comment' | 'follow' | 'new_post' | 'mention',
+  message: string,
+  relatedId?: Id<'messages'>
+) => {
+  try {
+    // Get the receiver's user record to check notification preferences
+    const receiver = await ctx.db.get(receiverId);
+    
+    if (!receiver) {
+      console.log('[Notifications] Receiver not found, skipping notification');
+      return;
+    }
+    
+    // Check if notifications are enabled (default to true if not set)
+    const enableNotifications = receiver.enableNotifications !== false;
+    
+    if (!enableNotifications) {
+      console.log('[Notifications] User has disabled all notifications');
+      return;
+    }
+    
+    // Check specific notification type preferences (default to true if not set)
+    if (type === 'like' && receiver.notifyLikes === false) {
+      console.log('[Notifications] User has disabled like notifications');
+      return;
+    }
+    
+    if (type === 'comment' && receiver.notifyComments === false) {
+      console.log('[Notifications] User has disabled comment notifications');
+      return;
+    }
+    
+    if (type === 'follow' && receiver.notifyFollows === false) {
+      console.log('[Notifications] User has disabled follow notifications');
+      return;
+    }
+    
+    // Don't send new_post notifications for users who disabled them
+    if (type === 'new_post' && receiver.notifyFollows === false) {
+      console.log('[Notifications] User has disabled new post notifications (follows disabled)');
+      return;
+    }
+    
+    await ctx.db.insert('notifications', {
+      userId: receiverId,
+      senderId,
+      senderUsername,
+      senderImageUrl,
+      type,
+      message,
+      createdAt: Date.now(),
+      isRead: false,
+      relatedId,
+    });
+  } catch (error) {
+    console.error('[Notifications] Error creating notification:', error);
+  }
+};
 
 export const addThread = mutation({
   args: {
@@ -50,13 +116,67 @@ export const addThread = mutation({
 
     console.log('[addThread] Inserted message with mediaFiles:', JSON.stringify(args.mediaFiles));
 
-    // Update parent thread's comment count if this is a comment
+    // Update parent thread's comment count ONLY for top-level comments (not replies)
+    // parentId = null means it's a top-level comment
+    // parentId = something means it's a reply to another comment
     if (args.threadId && !isScheduled) {
       const parentThread = await ctx.db.get(args.threadId);
       if (parentThread) {
-        await ctx.db.patch(args.threadId, {
-          commentCount: (parentThread.commentCount || 0) + 1,
-        });
+        // Only increment comment count for top-level comments
+        if (!args.parentId) {
+          await ctx.db.patch(args.threadId, {
+            commentCount: (parentThread.commentCount || 0) + 1,
+          });
+        }
+        // For replies, we could add reply count tracking here if needed
+
+        // Create comment notification for the post owner only for top-level comments
+        if (!args.parentId && parentThread.userId.toString() !== user._id.toString()) {
+          const senderUsername = user.username || `${user.first_name || ''} ${user.last_name || ''}`.trim() || 'Someone';
+          await createNotification(
+            ctx,
+            parentThread.userId,
+            user.clerkId || '',
+            senderUsername,
+            user.imageUrl,
+            'comment',
+            'commented on your post',
+            parentThread._id
+          );
+        }
+      }
+    }
+
+    // Create new_post notification for followers (only for new posts, not comments, not scheduled)
+    if (!args.threadId && !isScheduled) {
+      const senderUsername = user.username || `${user.first_name || ''} ${user.last_name || ''}`.trim() || 'Someone';
+      
+      // Get all followers of the current user
+      const followers = await ctx.db
+        .query('follows')
+        .withIndex('byFollowing', (q) => q.eq('followingId', user.clerkId))
+        .collect();
+
+      // Create notifications for each follower
+      for (const follower of followers) {
+        // Get the follower's user record to get their Convex user ID
+        const followerUser = await ctx.db
+          .query('users')
+          .withIndex('byClerkId', (q) => q.eq('clerkId', follower.followerId))
+          .first();
+
+        if (followerUser) {
+          await createNotification(
+            ctx,
+            followerUser._id,
+            user.clerkId || '',
+            senderUsername,
+            user.imageUrl,
+            'new_post',
+            'posted a new update',
+            message
+          );
+        }
       }
     }
 
@@ -65,10 +185,46 @@ export const addThread = mutation({
 });
 
 export const getThreads = query({
-  args: { paginationOpts: paginationOptsValidator, userId: v.optional(v.id('users')) },
+  args: { paginationOpts: paginationOptsValidator, userId: v.optional(v.id('users')), filterType: v.optional(v.union(v.literal("foryou"), v.literal("following"))) },
   handler: async (ctx, args) => {
-    const currentUser = await getCurrentUserOrThrow(ctx);
+    // Safely check if user is authenticated
+    const currentUser = await getCurrentUser(ctx);
+    
+    // Return empty result if user is not authenticated
+    if (!currentUser) {
+      return {
+        page: [],
+        continueCursor: null,
+        isDone: true,
+      };
+    }
+    
     console.log('[getThreads] Current user:', JSON.stringify(currentUser), args);
+    
+    // Get list of blocked user IDs (both ways for bidirectional blocking)
+    // 1. Users that current user has blocked
+    // 2. Users who have blocked current user
+    let blockedIds: string[] = [];
+    if (currentUser.clerkId) {
+      // Users current user has blocked
+      const blockedByMe = await ctx.db
+        .query('blockedUsers')
+        .withIndex('byBlocker', (q) => q.eq('blockerId', currentUser.clerkId))
+        .collect();
+      
+      // Users who have blocked current user
+      const blockedMe = await ctx.db
+        .query('blockedUsers')
+        .withIndex('byBlocked', (q) => q.eq('blockedId', currentUser.clerkId))
+        .collect();
+      
+      // Combine both lists
+      blockedIds = [
+        ...blockedByMe.map(b => b.blockedId),
+        ...blockedMe.map(b => b.blockerId)
+      ];
+    }
+    
     let threads;
     if (args.userId) {
       threads = await ctx.db
@@ -85,20 +241,57 @@ export const getThreads = query({
         .paginate(args.paginationOpts);
     }
 
+    // If filterType is 'following', get the list of users the current user follows
+    let followingUserClerkIds: string[] = [];
+    if (args.filterType === 'following' && currentUser.clerkId) {
+      const followingRelations = await ctx.db
+        .query('follows')
+        .withIndex('byFollower', (q) => q.eq('followerId', currentUser.clerkId))
+        .collect();
+      
+      // Get the users that current user follows
+      const followingUsers = await Promise.all(
+        followingRelations.map(f => 
+          ctx.db.query('users').withIndex('byClerkId', (q) => q.eq('clerkId', f.followingId)).first()
+        )
+      );
+      
+      followingUserClerkIds = followingUsers
+        .filter(u => u !== null)
+        .map(u => u!._id);
+    }
+
     // Filter posts in JS to handle isPosted field that might be undefined for old posts
-    // Also filter based on privacy settings
+    // Also filter based on privacy settings and blocked users
+    // Exclude archived posts and draft posts
     const postedThreads = threads.page.filter((thread) => {
       // Show posts where isPosted is true OR undefined (for backward compatibility)
-      return thread.isPosted !== false;
+      // Exclude archived posts
+      // Exclude draft posts - they should only be visible in drafts section
+      return thread.isPosted !== false && 
+             thread.isArchived !== true && 
+             thread.isDraft !== true;
     });
     
     // Get creators for all threads and check privacy
     const threadsWithPrivacy = await Promise.all(
       postedThreads.map(async (thread) => {
-        const creator = await ctx.db.get(thread.userId);
+        const creator = await ctx.db.get(thread.userId) as any;
         
         // If no creator, don't include
         if (!creator) return { thread, include: false };
+        
+        // If filterType is 'following', only include posts from users the current user follows
+        if (args.filterType === 'following' && followingUserClerkIds.length > 0) {
+          if (!followingUserClerkIds.includes(thread.userId)) {
+            return { thread, include: false };
+          }
+        }
+        
+        // Check if the post creator is blocked by current user
+        if (creator.clerkId && blockedIds.includes(creator.clerkId)) {
+          return { thread, include: false };
+        }
         
         // If account is not private, include
         if (!creator.isPrivate) return { thread, include: true };
@@ -187,14 +380,11 @@ export const getThreads = query({
           }
 
           // Dynamically calculate commentCount from database (safer approach)
-          // Count all messages that have this thread as their parent (threadId or postId)
+          // Count only TOP-LEVEL comments (where parentId is null/undefined)
           const comments = await ctx.db
             .query('messages')
             .filter((q) => 
-              q.or(
-                q.eq(q.field('threadId'), thread._id),
-                q.eq(q.field('postId'), thread._id)
-              )
+              q.and(q.or(q.eq(q.field('threadId'), thread._id), q.eq(q.field('postId'), thread._id)), q.eq(q.field('parentId'), undefined))
             )
             .collect();
           
@@ -263,6 +453,21 @@ export const toggleLike = mutation({
       await ctx.db.patch(args.messageId, {
         likeCount: (message?.likeCount || 0) + 1,
       });
+
+      // Create notification for like (only if liking someone else's post)
+      if (message && message.userId.toString() !== user._id.toString()) {
+        const senderUsername = user.username || `${user.first_name || ''} ${user.last_name || ''}`.trim() || 'Someone';
+        await createNotification(
+          ctx,
+          message.userId,
+          user.clerkId || '',
+          senderUsername,
+          user.imageUrl,
+          'like',
+          'liked your post',
+          args.messageId
+        );
+      }
       
       return { action: 'like' };
     }
@@ -300,7 +505,12 @@ export const getThreadComments = query({
       .collect();
 
     // Filter for posted comments only (not drafts or scheduled)
-    const postedComments = allComments.filter((comment) => comment.isPosted !== false);
+    // Allow comments where isPosted is true or undefined (default to posted)
+    const postedComments = allComments.filter((comment) => {
+        // Include if isPosted is explicitly true, or if it's not set (undefined/null)
+        // Exclude only if isPosted is explicitly false
+        return comment.isPosted !== false;
+    });
 
     const commentsWithMedia = await Promise.all(
       postedComments.map(async (comment) => {
@@ -364,6 +574,9 @@ const getMessageCreator = async (ctx: QueryCtx, userId: Id<'users'>): Promise<{
   last_name?: string;
   username?: string | null;
   imageUrl?: string;
+  isOnline?: boolean;
+  showOnlineStatus?: boolean;
+  lastSeen?: number;
 }> => {
   const user = await ctx.db.get(userId);
   if (!user) {
@@ -422,6 +635,41 @@ export const getUserReplies = query({
   args: { paginationOpts: paginationOptsValidator, userId: v.optional(v.id('users')) },
   handler: async (ctx, args) => {
     if (!args.userId) {
+      return { page: [], continueCursor: null, isDone: true };
+    }
+    
+    // Get current user to check blocked status
+    let currentUser;
+    try {
+      currentUser = await getCurrentUserOrThrow(ctx);
+    } catch (e) {
+      // Not authenticated, return empty
+      return { page: [], continueCursor: null, isDone: true };
+    }
+    
+    // Get the profile user's clerkId
+    const profileUser = await ctx.db.get(args.userId);
+    if (!profileUser) {
+      return { page: [], continueCursor: null, isDone: true };
+    }
+    
+    // Check if current user has blocked the profile user OR profile user has blocked current user
+    const blockedByMe = await ctx.db
+      .query('blockedUsers')
+      .withIndex('byBlockerAndBlocked', q => 
+        q.eq('blockerId', currentUser.clerkId).eq('blockedId', profileUser.clerkId)
+      )
+      .first();
+    
+    const blockedMe = await ctx.db
+      .query('blockedUsers')
+      .withIndex('byBlockerAndBlocked', q => 
+        q.eq('blockerId', profileUser.clerkId).eq('blockedId', currentUser.clerkId)
+      )
+      .first();
+    
+    // If blocked (either direction), return empty replies
+    if (blockedByMe || blockedMe) {
       return { page: [], continueCursor: null, isDone: true };
     }
     
@@ -694,6 +942,94 @@ export const deleteThread = mutation({
     await ctx.db.delete(args.threadId);
 
     return { success: true };
+  },
+});
+
+// Archive a post
+export const archivePost = mutation({
+  args: {
+    messageId: v.id('messages'),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUserOrThrow(ctx);
+    
+    const message = await ctx.db.get(args.messageId);
+    if (!message) {
+      throw new Error('Message not found');
+    }
+    
+    // Verify the user owns this message
+    if (message.userId !== user._id) {
+      throw new Error('Not authorized to archive this post');
+    }
+    
+    await ctx.db.patch(args.messageId, {
+      isArchived: true,
+    });
+
+    return { success: true };
+  },
+});
+
+// Unarchive/restore a post
+export const unarchivePost = mutation({
+  args: {
+    messageId: v.id('messages'),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUserOrThrow(ctx);
+    
+    const message = await ctx.db.get(args.messageId);
+    if (!message) {
+      throw new Error('Message not found');
+    }
+    
+    // Verify the user owns this message
+    if (message.userId !== user._id) {
+      throw new Error('Not authorized to unarchive this post');
+    }
+    
+    await ctx.db.patch(args.messageId, {
+      isArchived: false,
+    });
+
+    return { success: true };
+  },
+});
+
+// Get archived posts for current user
+export const getArchivedPosts = query({
+  args: {},
+  handler: async (ctx) => {
+    const user = await getCurrentUserOrThrow(ctx);
+    
+    const archivedPosts = await ctx.db
+      .query('messages')
+      .withIndex('byUser')
+      .filter((q) => 
+        q.and(
+          q.eq(q.field('userId'), user._id),
+          q.eq(q.field('isArchived'), true)
+        )
+      )
+      .order('desc')
+      .collect();
+
+    // Get creators for all posts
+    const postsWithCreators = await Promise.all(
+      archivedPosts.map(async (post) => {
+        const creator = await getMessageCreator(ctx, post.userId);
+        const mediaUrls = await getMediaUrls(ctx, post.mediaFiles);
+        
+        return {
+          ...post,
+          mediaFiles: mediaUrls,
+          creator,
+        };
+      })
+    );
+
+    return postsWithCreators;
   },
 });
 
@@ -1199,4 +1535,8 @@ export const getSavedStatus = query({
     return savedStatus;
   },
 });
+
+
+
+
 

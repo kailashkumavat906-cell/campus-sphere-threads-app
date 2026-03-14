@@ -1,8 +1,45 @@
 import { v } from 'convex/values';
-import { mutation, query } from './_generated/server';
+import { Id } from './_generated/dataModel';
+import { QueryCtx, mutation, query } from './_generated/server';
+import { getCurrentUser } from './users';
 
 // Type for notification
-export type NotificationType = 'like' | 'follow' | 'comment' | 'mention';
+export type NotificationType = 'like' | 'follow' | 'comment' | 'mention' | 'new_post' | 'user_online';
+
+// Spam limiting: time window in milliseconds (5 minutes)
+const SPAM_WINDOW = 5 * 60 * 1000;
+
+// Helper to check for duplicate notifications
+const checkDuplicateNotification = async (
+  ctx: QueryCtx,
+  receiverId: Id<'users'>,
+  senderId: string,
+  type: NotificationType,
+  relatedId?: Id<'messages'>
+): Promise<boolean> => {
+  const fiveMinutesAgo = Date.now() - SPAM_WINDOW;
+  
+  const existingNotifications = await ctx.db
+    .query('notifications')
+    .withIndex('byUserId', (q) => q.eq('userId', receiverId))
+    .filter((q) =>
+      q.and(
+        q.eq(q.field('senderId'), senderId),
+        q.eq(q.field('type'), type),
+        q.gte(q.field('createdAt'), fiveMinutesAgo)
+      )
+    )
+    .collect();
+
+  // If relatedId is provided, also check for that
+  if (relatedId) {
+    return existingNotifications.some(
+      (n) => n.relatedId?.toString() === relatedId?.toString()
+    );
+  }
+
+  return existingNotifications.length > 0;
+};
 
 // Add a new notification
 export const addNotification = mutation({
@@ -11,11 +48,25 @@ export const addNotification = mutation({
     senderId: v.string(),
     senderUsername: v.string(),
     senderImageUrl: v.optional(v.string()),
-    type: v.union(v.literal('like'), v.literal('follow'), v.literal('comment'), v.literal('mention')),
+    type: v.union(v.literal('like'), v.literal('follow'), v.literal('comment'), v.literal('mention'), v.literal('new_post')),
     message: v.string(),
     relatedId: v.optional(v.id('messages')),
   },
   handler: async (ctx, args) => {
+    // Check for duplicate notification (spam prevention)
+    const isDuplicate = await checkDuplicateNotification(
+      ctx,
+      args.userId,
+      args.senderId,
+      args.type,
+      args.relatedId
+    );
+    
+    if (isDuplicate) {
+      console.log('[Notifications] Duplicate notification skipped:', args.type, 'from', args.senderId);
+      return null;
+    }
+
     const notification = await ctx.db.insert('notifications', {
       userId: args.userId,
       senderId: args.senderId,
@@ -45,15 +96,88 @@ export const getNotifications = query({
       .collect();
     
     // Sort by createdAt descending (latest first)
-    return notifications.sort((a, b) => b.createdAt - a.createdAt);
+    const sortedNotifications = notifications.sort((a, b) => b.createdAt - a.createdAt);
+    
+    // For each notification with a relatedId, fetch the post to get the image
+    const notificationsWithPostImage = await Promise.all(
+      sortedNotifications.map(async (notification) => {
+        // Get sender info for online status
+        let senderData = {
+          _id: notification.senderId as Id<'users'>,
+          username: '',
+          imageUrl: undefined as string | undefined,
+          isOnline: false,
+          showOnlineStatus: true,
+        };
+        try {
+          const sender = await ctx.db.get(notification.senderId as Id<'users'>);
+          if (sender) {
+            senderData = {
+              _id: sender._id,
+              username: sender.username || '',
+              imageUrl: sender.imageUrl,
+              isOnline: sender.isOnline || false,
+              showOnlineStatus: sender.showOnlineStatus !== false,
+            };
+          }
+        } catch (e) {
+          // Ignore errors getting sender
+        }
+        
+        if (notification.relatedId && (notification.type === 'like' || notification.type === 'comment' || notification.type === 'new_post')) {
+          try {
+            const post = await ctx.db.get(notification.relatedId);
+            // Get the first media file if available
+            const postImageUrl = post?.mediaFiles && post.mediaFiles.length > 0 ? post.mediaFiles[0] : null;
+            // Get the post text (first 2-3 lines, approximately 100 characters)
+            const postText = post?.content ? (post.content.length > 100 ? post.content.substring(0, 100) + '...' : post.content) : null;
+            return {
+              ...notification,
+              postId: notification.relatedId,
+              postImageUrl,
+              postText,
+              sender: senderData,
+            };
+          } catch (e) {
+            return { ...notification, postId: notification.relatedId, postImageUrl: null, postText: null, sender: senderData };
+          }
+        }
+        return { ...notification, postId: notification.relatedId || null, postImageUrl: null, postText: null, sender: senderData };
+      })
+    );
+    
+    return notificationsWithPostImage;
   },
 });
 
-// Get notifications by type
+// Get unread notification count for the current user
+export const getUnreadNotificationCount = query({
+  args: {},
+  handler: async (ctx) => {
+    // Safely check if user is authenticated
+    const currentUser = await getCurrentUser(ctx);
+    
+    // Return 0 if user is not authenticated
+    if (!currentUser) {
+      return 0;
+    }
+    
+    // Get all unread notifications for the user
+    const unreadNotifications = await ctx.db
+      .query('notifications')
+      .withIndex('byUserId', (q) => q.eq('userId', currentUser._id))
+      .collect();
+    
+    // Filter for unread only
+    const unreadCount = unreadNotifications.filter(n => !n.isRead).length;
+    
+    return unreadCount;
+  },
+});
 export const getNotificationsByType = query({
   args: {
     userId: v.id('users'),
-    type: v.union(v.literal('like'), v.literal('follow'), v.literal('comment'), v.literal('mention')),
+    type: v.union(v.literal('like'), v.literal('follow'), v.literal('comment'), v.literal('mention'), v.literal('new_post')),
   },
   handler: async (ctx, args) => {
     const notifications = await ctx.db
@@ -64,7 +188,33 @@ export const getNotificationsByType = query({
       .collect();
     
     // Sort by createdAt descending (latest first)
-    return notifications.sort((a, b) => b.createdAt - a.createdAt);
+    const sortedNotifications = notifications.sort((a, b) => b.createdAt - a.createdAt);
+    
+    // For each notification with a relatedId, fetch the post to get the image
+    const notificationsWithPostImage = await Promise.all(
+      sortedNotifications.map(async (notification) => {
+        if (notification.relatedId && (notification.type === 'like' || notification.type === 'comment' || notification.type === 'new_post')) {
+          try {
+            const post = await ctx.db.get(notification.relatedId);
+            // Get the first media file if available
+            const postImageUrl = post?.mediaFiles && post.mediaFiles.length > 0 ? post.mediaFiles[0] : null;
+            // Get the post text (first 50 characters)
+            const postText = post?.content ? (post.content.length > 50 ? post.content.substring(0, 50) + '...' : post.content) : null;
+            return {
+              ...notification,
+              postId: notification.relatedId,
+              postImageUrl,
+              postText,
+            };
+          } catch (e) {
+            return { ...notification, postId: notification.relatedId, postImageUrl: null, postText: null };
+          }
+        }
+        return { ...notification, postId: notification.relatedId || null, postImageUrl: null, postText: null };
+      })
+    );
+    
+    return notificationsWithPostImage;
   },
 });
 

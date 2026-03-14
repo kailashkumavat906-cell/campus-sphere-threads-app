@@ -3,12 +3,40 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useCallback } from 'react';
 import {
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+interface ActivityOptionProps {
+  title: string;
+  subtitle: string;
+  icon: string;
+  onPress: () => void;
+  colors: any;
+}
+
+function ActivityOption({ title, subtitle, icon, onPress, colors }: ActivityOptionProps) {
+  return (
+    <TouchableOpacity
+      style={styles.option}
+      onPress={onPress}
+      activeOpacity={0.7}
+    >
+      <View style={[styles.iconContainer, { backgroundColor: colors.icon + '20' }]}>
+        <Ionicons name={icon as any} size={22} color={colors.text} />
+      </View>
+      <View style={styles.optionContent}>
+        <Text style={[styles.optionTitle, { color: colors.text }]}>{title}</Text>
+        <Text style={[styles.optionSubtitle, { color: colors.icon }]}>{subtitle}</Text>
+      </View>
+      <Ionicons name="chevron-forward" size={20} color={colors.icon} />
+    </TouchableOpacity>
+  );
+}
 
 export default function DataActivityScreen() {
   const { top } = useSafeAreaInsets();
@@ -17,6 +45,21 @@ export default function DataActivityScreen() {
 
   const handleGoBack = useCallback(() => {
     router.dismiss();
+  }, [router]);
+
+  const handleSearchHistory = useCallback(() => {
+    // @ts-ignore
+    router.push('/(auth)/(modal)/search-history');
+  }, [router]);
+
+  const handleLoginActivity = useCallback(() => {
+    // @ts-ignore
+    router.push('/(auth)/(modal)/login-activity');
+  }, [router]);
+
+  const handleAccountUsage = useCallback(() => {
+    // @ts-ignore
+    router.push('/(auth)/(modal)/account-usage');
   }, [router]);
 
   return (
@@ -31,15 +74,45 @@ export default function DataActivityScreen() {
       </View>
 
       {/* Content */}
-      <View style={styles.content}>
-        <View style={styles.emptyState}>
-          <Ionicons name="analytics" size={64} color={colors.icon} />
-          <Text style={[styles.emptyTitle, { color: colors.text }]}>Data & Activity</Text>
-          <Text style={[styles.emptySubtitle, { color: colors.icon }]}>
-            Manage your data and activity settings. This section will allow you to download your data, view your activity history, and manage how your data is used.
-          </Text>
+      <ScrollView 
+        style={styles.content}
+        contentContainerStyle={styles.contentContainer}
+        showsVerticalScrollIndicator={true}
+      >
+        <View style={styles.section}>
+          <Text style={[styles.sectionTitle, { color: colors.icon }]}>Activity</Text>
+          
+          <ActivityOption
+            title="Search History"
+            subtitle="Profiles you've searched for"
+            icon="search"
+            onPress={handleSearchHistory}
+            colors={colors}
+          />
         </View>
-      </View>
+
+        <View style={styles.section}>
+          <Text style={[styles.sectionTitle, { color: colors.icon }]}>Account</Text>
+          
+          <ActivityOption
+            title="Login Activity"
+            subtitle="Devices where your account is logged in"
+            icon="device-mobile"
+            onPress={handleLoginActivity}
+            colors={colors}
+          />
+          
+          <ActivityOption
+            title="Account Usage"
+            subtitle="Your account statistics"
+            icon="stats-chart"
+            onPress={handleAccountUsage}
+            colors={colors}
+          />
+        </View>
+
+        <View style={styles.bottomPadding} />
+      </ScrollView>
     </View>
   );
 }
@@ -72,24 +145,46 @@ const styles = StyleSheet.create({
   },
   content: {
     flex: 1,
+  },
+  contentContainer: {
+    padding: 16,
+  },
+  section: {
+    marginBottom: 24,
+  },
+  sectionTitle: {
+    fontSize: 13,
+    fontWeight: '500',
+    marginBottom: 8,
+    paddingHorizontal: 4,
+  },
+  option: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderRadius: 12,
+    marginBottom: 8,
+  },
+  iconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 32,
+    marginRight: 12,
   },
-  emptyState: {
-    alignItems: 'center',
-    justifyContent: 'center',
+  optionContent: {
+    flex: 1,
   },
-  emptyTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-    marginTop: 24,
-    textAlign: 'center',
-  },
-  emptySubtitle: {
+  optionTitle: {
     fontSize: 15,
-    marginTop: 8,
-    textAlign: 'center',
-    lineHeight: 22,
+    fontWeight: '500',
+  },
+  optionSubtitle: {
+    fontSize: 13,
+    marginTop: 2,
+  },
+  bottomPadding: {
+    height: 32,
   },
 });

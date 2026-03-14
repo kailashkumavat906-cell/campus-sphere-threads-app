@@ -1,3 +1,4 @@
+import { UserAvatar } from '@/components/UserAvatar';
 import { api } from '@/convex/_generated/api';
 import { Id } from '@/convex/_generated/dataModel';
 import { useThemeColors } from '@/hooks/useThemeColor';
@@ -8,12 +9,11 @@ import { useCallback, useEffect, useState } from 'react';
 import {
     ActivityIndicator,
     FlatList,
-    Image,
     StyleSheet,
     Text,
     TextInput,
     TouchableOpacity,
-    View,
+    View
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -25,6 +25,8 @@ type SearchUser = {
     username?: string | null;
     imageUrl?: string;
     followersCount?: number;
+    isOnline?: boolean;
+    showOnlineStatus?: boolean;
 };
 
 // Debounce hook
@@ -90,19 +92,8 @@ const UserItem = ({
         >
             <View style={styles.userContent}>
                 <View style={styles.avatarContainer}>
-                    {item.imageUrl ? (
-                        <Image
-                            source={{ uri: item.imageUrl }}
-                            style={styles.avatar}
-                        />
-                    ) : (
-                        <View style={[styles.avatarPlaceholder, { backgroundColor: colors.tint }]}>
-                            <Text style={styles.avatarPlaceholderText}>
-                                {(item.first_name?.[0] || item.last_name?.[0] || '?').toUpperCase()}
-                            </Text>
-                        </View>
-                    )}
-                </View>
+                        <UserAvatar user={item} size={48} />
+                    </View>
                 <View style={styles.userInfo}>
                     <Text style={[styles.userName, { color: colors.text }]} numberOfLines={1}>
                         {fullName}
@@ -158,6 +149,9 @@ const Page = () => {
     // Mutation for follow/unfollow
     const followUser = useMutation(api.users.followUser);
     const unfollowUser = useMutation(api.users.unfollowUser);
+    
+    // Mutation for adding to search history
+    const addToSearchHistory = useMutation(api.users.addToSearchHistory);
 
     // Determine what to show
     const isSearching = searchText.length > 0;
@@ -167,8 +161,17 @@ const Page = () => {
     const showInitialState = !isSearching && recommendedUsers && recommendedUsers.length > 0;
 
     const handleUserPress = useCallback((clerkId: string) => {
+        // Save to search history
+        const user = users?.find(u => u.clerkId === clerkId);
+        if (user) {
+            const username = user.username || `${user.first_name || ''} ${user.last_name || ''}`.trim();
+            addToSearchHistory({
+                searchedUsername: username,
+                searchedClerkId: clerkId,
+            }).catch(console.error);
+        }
         router.push(`/profile?clerkId=${clerkId}`);
-    }, []);
+    }, [users, addToSearchHistory]);
 
     const handleFollowPress = useCallback(async (clerkId: string, isCurrentlyFollowing: boolean) => {
         try {
@@ -329,6 +332,17 @@ const styles = StyleSheet.create({
         color: '#FFFFFF',
         fontSize: 18,
         fontWeight: '600',
+    },
+    onlineIndicator: {
+        position: 'absolute',
+        bottom: 0,
+        right: 0,
+        width: 12,
+        height: 12,
+        borderRadius: 6,
+        backgroundColor: '#22c55e',
+        borderWidth: 2,
+        borderColor: '#fff',
     },
     userInfo: {
         flex: 1,

@@ -36,22 +36,54 @@ export default function SignUpScreen() {
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState<{ email?: string; password?: string }>({});
 
+  // Password validation state - individual requirements
+  const [passwordRequirements, setPasswordRequirements] = useState({
+    minLength: false,
+    uppercase: false,
+    number: false,
+    specialChars: false,
+  });
+
   const validateEmail = (email: string): boolean => {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     return emailRegex.test(email);
   };
 
-    const validatePassword = (password: string): { isValid: boolean; error?: string } => {
+  // Update individual password requirements as user types
+  const updatePasswordRequirements = (pwd: string) => {
+    const specialChars = pwd.match(/[!@#$%^&*]/g) || [];
+    setPasswordRequirements({
+      minLength: pwd.length >= 8,
+      uppercase: /[A-Z]/.test(pwd),
+      number: /[0-9]/.test(pwd),
+      specialChars: specialChars.length >= 2,
+    });
+  };
+
+  // Check if all password requirements are met
+  const isPasswordValid = (): boolean => {
+    return passwordRequirements.minLength && 
+           passwordRequirements.uppercase && 
+           passwordRequirements.number && 
+           passwordRequirements.specialChars;
+  };
+
+  const validatePassword = (password: string): { isValid: boolean; error?: string } => {
     if (!password || password.length < 8) {
-      return { isValid: false, error: 'Password must be at least 8 characters and include a number and special character.' };
+      return { isValid: false, error: 'Password must be at least 8 characters, include an uppercase letter, a number, and 2 special characters.' };
+    }
+    
+    if (!/[A-Z]/.test(password)) {
+      return { isValid: false, error: 'Password must contain at least one uppercase letter.' };
     }
     
     if (!/[0-9]/.test(password)) {
-      return { isValid: false, error: 'Password must be at least 8 characters and include a number and special character.' };
+      return { isValid: false, error: 'Password must contain at least one number.' };
     }
     
-    if (!/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password)) {
-      return { isValid: false, error: 'Password must be at least 8 characters and include a number and special character.' };
+    const specialChars = password.match(/[!@#$%^&*]/g) || [];
+    if (specialChars.length < 2) {
+      return { isValid: false, error: 'Password must contain at least 2 special characters (!@#$%^&*).' };
     }
     
     return { isValid: true };
@@ -80,6 +112,12 @@ export default function SignUpScreen() {
     const passwordValidation = validatePassword(password);
     if (!passwordValidation.isValid) {
       setErrors(prev => ({ ...prev, password: passwordValidation.error }));
+      return;
+    }
+
+    // Also check if all UI requirements are met
+    if (!isPasswordValid()) {
+      setErrors(prev => ({ ...prev, password: 'Please meet all password requirements.' }));
       return;
     }
 
@@ -256,6 +294,7 @@ export default function SignUpScreen() {
                 value={password}
                 onChangeText={(text) => {
                   setPassword(text);
+                  updatePasswordRequirements(text);
                   if (errors.password) setErrors(prev => ({ ...prev, password: undefined }));
                 }}
                 secureTextEntry={!showPassword}
@@ -276,19 +315,90 @@ export default function SignUpScreen() {
             </View>
             {errors.password && <Text style={[styles.errorText, { color: colors.authError }]}>{errors.password}</Text>}
 
+            {/* Password Requirements Checklist */}
+            <View style={styles.passwordRequirementsContainer}>
+              <Text style={[styles.passwordRequirementsTitle, { color: colors.authTextSecondary }]}>
+                Password Requirements
+              </Text>
+              
+              {/* Minimum 8 characters */}
+              <View style={styles.requirementRow}>
+                <Ionicons 
+                  name={passwordRequirements.minLength ? 'checkmark-circle' : 'ellipse-outline'} 
+                  size={16} 
+                  color={passwordRequirements.minLength ? '#22c55e' : colors.authTextPlaceholder} 
+                  style={styles.requirementIcon}
+                />
+                <Text style={[
+                  styles.requirementText, 
+                  { color: passwordRequirements.minLength ? '#22c55e' : colors.authTextPlaceholder }
+                ]}>
+                  At least 8 characters
+                </Text>
+              </View>
+              
+              {/* One uppercase letter */}
+              <View style={styles.requirementRow}>
+                <Ionicons 
+                  name={passwordRequirements.uppercase ? 'checkmark-circle' : 'ellipse-outline'} 
+                  size={16} 
+                  color={passwordRequirements.uppercase ? '#22c55e' : colors.authTextPlaceholder} 
+                  style={styles.requirementIcon}
+                />
+                <Text style={[
+                  styles.requirementText, 
+                  { color: passwordRequirements.uppercase ? '#22c55e' : colors.authTextPlaceholder }
+                ]}>
+                  One uppercase letter
+                </Text>
+              </View>
+              
+              {/* One number */}
+              <View style={styles.requirementRow}>
+                <Ionicons 
+                  name={passwordRequirements.number ? 'checkmark-circle' : 'ellipse-outline'} 
+                  size={16} 
+                  color={passwordRequirements.number ? '#22c55e' : colors.authTextPlaceholder} 
+                  style={styles.requirementIcon}
+                />
+                <Text style={[
+                  styles.requirementText, 
+                  { color: passwordRequirements.number ? '#22c55e' : colors.authTextPlaceholder }
+                ]}>
+                  One number
+                </Text>
+              </View>
+              
+              {/* Two special characters */}
+              <View style={styles.requirementRow}>
+                <Ionicons 
+                  name={passwordRequirements.specialChars ? 'checkmark-circle' : 'ellipse-outline'} 
+                  size={16} 
+                  color={passwordRequirements.specialChars ? '#22c55e' : colors.authTextPlaceholder} 
+                  style={styles.requirementIcon}
+                />
+                <Text style={[
+                  styles.requirementText, 
+                  { color: passwordRequirements.specialChars ? '#22c55e' : colors.authTextPlaceholder }
+                ]}>
+                  Two special characters
+                </Text>
+              </View>
+            </View>
+
             {/* Sign Up Button with Gradient */}
             <TouchableOpacity 
               onPress={handleEmailSignUp}
-              disabled={loading}
+              disabled={loading || !isPasswordValid()}
               accessibilityLabel="Sign up button"
               accessibilityRole="button"
               activeOpacity={0.8}
             >
               <LinearGradient
-                colors={colors.authGradient as any}
+                colors={!isPasswordValid() ? ['#9ca3af', '#9ca3af'] : (colors.authGradient as any)}
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 0 }}
-                style={styles.signUpButton}
+                style={[styles.signUpButton, !isPasswordValid() && styles.signUpButtonDisabled]}
               >
                 {loading ? (
                   <ActivityIndicator color={colors.authButtonText} />
@@ -433,6 +543,30 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     marginLeft: 4,
   },
+  passwordRequirementsContainer: {
+    marginTop: 8,
+    marginBottom: 16,
+    padding: 12,
+    backgroundColor: 'rgba(0,0,0,0.02)',
+    borderRadius: 12,
+  },
+  passwordRequirementsTitle: {
+    fontSize: 12,
+    fontWeight: '600',
+    marginBottom: 8,
+    letterSpacing: 0.5,
+  },
+  requirementRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  requirementIcon: {
+    marginRight: 8,
+  },
+  requirementText: {
+    fontSize: 13,
+  },
   signUpButton: {
     width: '100%',
     height: 52,
@@ -447,6 +581,10 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 4,
     marginTop: 8,
+  },
+  signUpButtonDisabled: {
+    shadowOpacity: 0.1,
+    elevation: 2,
   },
   signUpButtonText: {
     fontSize: 16,
