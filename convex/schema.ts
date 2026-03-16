@@ -81,14 +81,6 @@ export const Follow = {
   createdAt: v.number(),
 };
 
-export const FollowRequest = {
-  fromClerkId: v.string(), // Clerk user ID - who wants to follow
-  toClerkId: v.string(), // Clerk user ID - who receives the request
-  status: v.union(v.literal('pending'), v.literal('accepted'), v.literal('rejected')),
-  createdAt: v.number(),
-  updatedAt: v.number(),
-};
-
 export const BlockedUser = {
   blockerId: v.string(), // Clerk user ID - who is blocking
   blockedId: v.string(), // Clerk user ID - who is being blocked
@@ -125,6 +117,14 @@ export const SearchHistory = {
   searchedAt: v.number(),
 };
 
+export const FollowRequest = {
+  fromClerkId: v.string(),
+  toClerkId: v.string(),
+  status: v.string(),
+  createdAt: v.number(),
+  updatedAt: v.number(),
+};
+
 export default defineSchema({
   users: defineTable(User).index('byClerkId', ['clerkId']).searchIndex('searchUsers', {
     searchField: 'username',
@@ -145,7 +145,6 @@ export default defineSchema({
   pollVotes: defineTable(PollVote).index('byUserAndPoll', ['userId', 'pollId']),
   savedPosts: defineTable(SavedPost).index('byUserAndMessage', ['userId', 'messageId']).index('byUser', ['userId']),
   follows: defineTable(Follow).index('byFollowerAndFollowing', ['followerId', 'followingId']).index('byFollowing', ['followingId']).index('byFollower', ['followerId']),
-  followRequests: defineTable(FollowRequest).index('byToClerkId', ['toClerkId']).index('byFromClerkId', ['fromClerkId']).index('byToAndStatus', ['toClerkId', 'status']),
   blockedUsers: defineTable(BlockedUser).index('byBlocker', ['blockerId']).index('byBlocked', ['blockedId']).index('byBlockerAndBlocked', ['blockerId', 'blockedId']),
   notifications: defineTable(Notification)
     .index('byUserId', ['userId'])
@@ -155,4 +154,5 @@ export default defineSchema({
   searchHistory: defineTable(SearchHistory)
     .index('byUser', ['userId'])
     .index('byUserAndSearchedAt', ['userId', 'searchedAt']),
+  followRequests: defineTable(FollowRequest).index('byToAndStatus', ['toClerkId', 'status']),
 });
