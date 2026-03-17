@@ -76,8 +76,7 @@ export const addThread = mutation({
     content: v.string(),
     mediaFiles: v.optional(v.array(v.string())),
     websiteUrl: v.optional(v.string()),
-    threadId: v.optional(v.id('messages')),
-    parentId: v.optional(v.union(v.id('messages'), v.null())), // For nested replies
+    // threadId and parentId are no longer used - comments are handled by addComment mutation
     scheduledFor: v.optional(v.number()),
     // Poll fields
     isPoll: v.optional(v.boolean()),
@@ -95,10 +94,9 @@ export const addThread = mutation({
     const isScheduled = args.scheduledFor !== undefined && args.scheduledFor > Date.now();
 
     // Extract poll fields
-    const { isPoll, pollQuestion, pollOptions, pollDuration, pollMultipleChoice, ...rest } = args;
+    const { isPoll, pollQuestion, pollOptions, pollDuration, pollMultipleChoice } = args;
 
     const message = await ctx.db.insert('messages', {
-      ...rest,
       userId: user._id,
       likeCount: 0,
       commentCount: 0,
@@ -111,44 +109,15 @@ export const addThread = mutation({
       pollOptions,
       pollDuration,
       pollMultipleChoice,
-      parentId: args.parentId ?? undefined,
+      content: args.content,
+      mediaFiles: args.mediaFiles,
+      websiteUrl: args.websiteUrl,
     });
 
     console.log('[addThread] Inserted message with mediaFiles:', JSON.stringify(args.mediaFiles));
 
-    // Update parent thread's comment count ONLY for top-level comments (not replies)
-    // parentId = null means it's a top-level comment
-    // parentId = something means it's a reply to another comment
-    if (args.threadId && !isScheduled) {
-      const parentThread = await ctx.db.get(args.threadId);
-      if (parentThread) {
-        // Only increment comment count for top-level comments
-        if (!args.parentId) {
-          await ctx.db.patch(args.threadId, {
-            commentCount: (parentThread.commentCount || 0) + 1,
-          });
-        }
-        // For replies, we could add reply count tracking here if needed
-
-        // Create comment notification for the post owner only for top-level comments
-        if (!args.parentId && parentThread.userId.toString() !== user._id.toString()) {
-          const senderUsername = user.username || `${user.first_name || ''} ${user.last_name || ''}`.trim() || 'Someone';
-          await createNotification(
-            ctx,
-            parentThread.userId,
-            user.clerkId || '',
-            senderUsername,
-            user.imageUrl,
-            'comment',
-            'commented on your post',
-            parentThread._id
-          );
-        }
-      }
-    }
-
-    // Create new_post notification for followers (only for new posts, not comments, not scheduled)
-    if (!args.threadId && !isScheduled) {
+    // Create new_post notification for followers (only for new posts, not scheduled)
+    if (!isScheduled) {
       const senderUsername = user.username || `${user.first_name || ''} ${user.last_name || ''}`.trim() || 'Someone';
       
       // Get all followers of the current user
@@ -181,6 +150,146 @@ export const addThread = mutation({
     }
 
     return message;
+  },
+});
+
+// New mutation to add comments to the dedicated comments table
+export const addComment = mutation({
+  args: {
+    postId: v.id('messages'),
+    text: v.string(),
+    parentCommentId: v.optional(v.id('comments')),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUserOrThrow(ctx);
+    
+    // Get the parent post to check ownership for notifications
+    const parentPost = await ctx.db.get(args.postId);
+    if (!parentPost) {
+      throw new Error('Post not found');
+    }
+    
+    // Insert the comment into the comments table
+    const comment = await ctx.db.insert('comments', {
+      postId: args.postId,
+      userId: user._id,
+      commentText: args.text,
+      parentCommentId: args.parentCommentId ?? undefined,
+      createdAt: Date.now(),
+      likeCount: 0,
+    });
+    
+    // Create comment notification for the post owner (only for top-level comments)
+    if (!args.parentCommentId && parentPost.userId.toString() !== user._id.toString()) {
+      const senderUsername = user.username || `${user.first_name || ''} ${user.last_name || ''}`.trim() || 'Someone';
+      await createNotification(
+        ctx,
+        parentPost.userId,
+        user.clerkId || '',
+        senderUsername,
+        user.imageUrl,
+        'comment',
+        'commented on your post',
+        parentPost._id
+      );
+    }
+    
+    return comment;
+  },
+});
+
+// Query to get comment count for a specific post from comments table
+export const getCommentCount = query({
+  args: {
+    postId: v.id('messages'),
+  },
+  handler: async (ctx, args) => {
+    const comments = await ctx.db
+      .query('comments')
+      .withIndex('byPost', (q) => q.eq('postId', args.postId))
+      .collect();
+    
+    // Count only top-level comments (not replies)
+    return comments.filter(c => !c.parentCommentId).length;
+  },
+});
+
+// Delete a comment
+export const deleteComment = mutation({
+  args: {
+    commentId: v.id('comments'),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUserOrThrow(ctx);
+    
+    const comment = await ctx.db.get(args.commentId);
+    if (!comment) {
+      throw new Error('Comment not found');
+    }
+    
+    // Verify the user owns the comment
+    if (comment.userId.toString() !== user._id.toString()) {
+      throw new Error('Not authorized to delete this comment');
+    }
+    
+    // Delete the comment - comment count is now calculated dynamically from comments table
+    await ctx.db.delete(args.commentId);
+  },
+});
+
+// Migration function to fix old comments with 'text' instead of 'commentText'
+export const migrateComments = mutation({
+  handler: async (ctx) => {
+    const allComments = await ctx.db.query('comments').collect();
+    
+    let migratedCount = 0;
+    for (const comment of allComments) {
+      // @ts-ignore - Handle old format with 'text' field
+      if (comment.text && !comment.commentText) {
+        // @ts-ignore
+        await ctx.db.patch(comment._id, { commentText: comment.text });
+        migratedCount++;
+      }
+    }
+    
+    return { migratedCount };
+  },
+});
+
+// Clean up legacy 'text' field after migration
+export const cleanupLegacyTextField = mutation({
+  handler: async (ctx) => {
+    const allComments = await ctx.db.query('comments').collect();
+    
+    let cleanedCount = 0;
+    for (const comment of allComments) {
+      // @ts-ignore - Check if commentText exists
+      if (comment.commentText && comment.text) {
+        // @ts-ignore - Remove the legacy text field
+        await ctx.db.patch(comment._id, { text: undefined });
+        cleanedCount++;
+      }
+    }
+    
+    return { cleanedCount };
+  },
+});
+
+// Internal function to get all comments (for migration)
+export const _internalGetAllComments = query({
+  handler: async (ctx) => {
+    return await ctx.db.query('comments').collect();
+  },
+});
+
+// Internal function to migrate a single comment
+export const _internalMigrateComment = mutation({
+  args: {
+    commentId: v.id('comments'),
+    text: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.commentId, { commentText: args.text });
   },
 });
 
@@ -308,21 +417,7 @@ export const getThreads = query({
           return { thread, include: true };
         }
         
-        // Also check if there's a pending follow request - if pending, don't show posts
-        const pendingRequest = await ctx.db
-          .query('followRequests')
-          .withIndex('byToAndStatus', (q) => 
-            q.eq('toClerkId', creator.clerkId).eq('status', 'pending')
-          )
-          .filter((q) => q.eq(q.field('fromClerkId'), currentUser.clerkId))
-          .first();
-        
-        // If there's a pending request, don't include the thread
-        if (pendingRequest) {
-          return { thread, include: false };
-        }
-        
-        // Not following and no pending request - don't show posts
+        // Not following - don't show posts from private accounts
         return { thread, include: false };
       })
     );
@@ -367,6 +462,14 @@ export const getThreads = query({
           
           const isLiked = !!existingLike;
 
+          // Dynamically calculate likeCount from the likes table (single source of truth)
+          const allLikes = await ctx.db
+            .query('likes')
+            .withIndex('byMessage', (q) => q.eq('messageId', thread._id))
+            .collect();
+          
+          const likeCount = allLikes.length;
+
           // Check if current user is following this creator (using Clerk IDs)
           let isFollowing = false;
           if (creator && creator.clerkId && currentUser.clerkId && creator.clerkId !== currentUser.clerkId) {
@@ -379,17 +482,15 @@ export const getThreads = query({
             isFollowing = !!existingFollow;
           }
 
-          // Dynamically calculate commentCount from database (safer approach)
-          // Count only TOP-LEVEL comments (where parentId is null/undefined)
-          const comments = await ctx.db
-            .query('messages')
-            .filter((q) => 
-              q.and(q.or(q.eq(q.field('threadId'), thread._id), q.eq(q.field('postId'), thread._id)), q.eq(q.field('parentId'), undefined))
-            )
+          // Dynamically calculate commentCount from the COMMENTS table
+          // Count only TOP-LEVEL comments (where parentCommentId is null/undefined)
+          const allComments = await ctx.db
+            .query('comments')
+            .withIndex('byPost', (q) => q.eq('postId', thread._id))
             .collect();
           
-          // Only count posted comments (not drafts or scheduled)
-          const actualCommentCount = comments.filter(c => c.isPosted !== false && c.isDraft !== true).length;
+          // Only count top-level comments (not replies)
+          const actualCommentCount = allComments.filter(c => !c.parentCommentId).length;
 
           return {
             ...thread,
@@ -397,6 +498,7 @@ export const getThreads = query({
             creator,
             isLiked,
             isFollowing,
+            likeCount, // Use dynamically calculated count from likes table
             commentCount: actualCommentCount, // Use dynamically calculated count
             isSaved: savedMessageIds.has(thread._id), // Include saved status
           };
@@ -479,16 +581,75 @@ export const getThreadById = query({
     messageId: v.id('messages'),
   },
   handler: async (ctx, args) => {
+    const currentUser = await getCurrentUser(ctx);
+    if (!currentUser) return null;
+
     const message = await ctx.db.get(args.messageId);
     if (!message) return null;
 
     const creator = await getMessageCreator(ctx, message.userId);
     const mediaUrls = await getMediaUrls(ctx, message.mediaFiles);
 
+    // Check if current user has liked this message
+    const existingLike = await ctx.db
+      .query('likes')
+      .filter((q) => 
+        q.and(
+          q.eq(q.field('userId'), currentUser._id),
+          q.eq(q.field('messageId'), args.messageId)
+        )
+      )
+      .first();
+    
+    const isLiked = !!existingLike;
+
+    // Dynamically calculate likeCount from the likes table (single source of truth)
+    const allLikes = await ctx.db
+      .query('likes')
+      .withIndex('byMessage', (q) => q.eq('messageId', args.messageId))
+      .collect();
+    
+    const likeCount = allLikes.length;
+
+    // Check if current user is following this creator
+    let isFollowing = false;
+    if (creator && creator.clerkId && currentUser.clerkId && creator.clerkId !== currentUser.clerkId) {
+      const existingFollow = await ctx.db
+        .query('follows')
+        .withIndex('byFollowerAndFollowing', (q) => 
+          q.eq('followerId', currentUser.clerkId!).eq('followingId', creator.clerkId!)
+        )
+        .first();
+      isFollowing = !!existingFollow;
+    }
+
+    // Get saved status
+    const savedPost = await ctx.db
+      .query('savedPosts')
+      .filter((q) => 
+        q.and(
+          q.eq(q.field('userId'), currentUser._id),
+          q.eq(q.field('messageId'), args.messageId)
+        )
+      )
+      .first();
+
+    // Dynamically calculate commentCount from comments table
+    const allComments = await ctx.db
+      .query('comments')
+      .withIndex('byPost', (q) => q.eq('postId', args.messageId))
+      .collect();
+    const actualCommentCount = allComments.filter(c => !c.parentCommentId).length;
+
     return {
       ...message,
       mediaFiles: mediaUrls,
       creator,
+      isLiked,
+      isFollowing,
+      likeCount, // Use dynamically calculated count from likes table
+      commentCount: actualCommentCount, // Use dynamically calculated count
+      isSaved: !!savedPost,
     };
   },
 });
@@ -498,29 +659,46 @@ export const getThreadComments = query({
     messageId: v.id('messages'),
   },
   handler: async (ctx, args) => {
+    // Fetch comments from the new comments table using the byPost index
     const allComments = await ctx.db
-      .query('messages')
-      .filter((q) => q.eq(q.field('threadId'), args.messageId))
+      .query('comments')
+      .withIndex('byPost', (q) => q.eq('postId', args.messageId))
       .order('desc')
       .collect();
 
-    // Filter for posted comments only (not drafts or scheduled)
-    // Allow comments where isPosted is true or undefined (default to posted)
-    const postedComments = allComments.filter((comment) => {
-        // Include if isPosted is explicitly true, or if it's not set (undefined/null)
-        // Exclude only if isPosted is explicitly false
-        return comment.isPosted !== false;
-    });
-
-    const commentsWithMedia = await Promise.all(
-      postedComments.map(async (comment) => {
+    const commentsWithUser = await Promise.all(
+      allComments.map(async (comment) => {
         const creator = await getMessageCreator(ctx, comment.userId);
-        const mediaUrls = await getMediaUrls(ctx, comment.mediaFiles);
+        
+        // Check if current user has liked this comment
+        const currentUser = await getCurrentUser(ctx);
+        let isLiked = false;
+        if (currentUser) {
+          const existingLike = await ctx.db
+            .query('commentLikes')
+            .withIndex('byUserAndComment')
+            .filter((q) => 
+              q.and(
+                q.eq(q.field('userId'), currentUser._id),
+                q.eq(q.field('commentId'), comment._id)
+              )
+            )
+            .first();
+          isLiked = !!existingLike;
+        }
 
         return {
-          ...comment,
-          mediaFiles: mediaUrls,
+          _id: comment._id,
+          _creationTime: comment._creationTime,
+          postId: comment.postId,
+          userId: comment.userId,
+          text: comment.commentText,
+          parentCommentId: comment.parentCommentId,
+          createdAt: comment.createdAt,
+          likeCount: comment.likeCount ?? 0,
+          isLiked,
           creator,
+          replies: [],
         };
       })
     );
@@ -530,16 +708,16 @@ export const getThreadComments = query({
     const topLevelComments: any[] = [];
 
     // First pass: create map of all comments
-    commentsWithMedia.forEach((comment) => {
+    commentsWithUser.forEach((comment) => {
       commentMap.set(comment._id, { ...comment, replies: [] });
     });
 
     // Second pass: organize into tree
-    commentsWithMedia.forEach((comment) => {
+    commentsWithUser.forEach((comment) => {
       const commentWithReplies = commentMap.get(comment._id);
-      if (comment.parentId) {
+      if (comment.parentCommentId) {
         // This is a reply to another comment
-        const parentComment = commentMap.get(comment.parentId);
+        const parentComment = commentMap.get(comment.parentCommentId);
         if (parentComment) {
           parentComment.replies.push(commentWithReplies);
         } else {
@@ -673,37 +851,75 @@ export const getUserReplies = query({
       return { page: [], continueCursor: null, isDone: true };
     }
     
-    // Get all messages by this user that are replies (have threadId)
-    const messages = await ctx.db
-      .query('messages')
+    // Get all comments by this user from the comments table
+    const comments = await ctx.db
+      .query('comments')
       .withIndex('byUser')
       .filter((q) => q.eq(q.field('userId'), args.userId))
       .order('desc')
       .paginate(args.paginationOpts);
 
-    // Filter for replies (have threadId) and isPosted
-    const repliesWithCreator = await Promise.all(
-      messages.page
-        .filter((message) => {
-          // Must have a threadId (be a reply) and be posted
-          return message.threadId !== undefined && message.isPosted !== false;
-        })
-        .map(async (message) => {
-          const creator = await getMessageCreator(ctx, message.userId);
-          const mediaUrls = await getMediaUrls(ctx, message.mediaFiles);
+    // For each comment, get the post it belongs to and the comment creator
+    const repliesWithPost = await Promise.all(
+      comments.page
+        .map(async (comment) => {
+          // Get the post this comment belongs to
+          const post = await ctx.db.get(comment.postId);
+          
+          // Get the creator of the comment
+          const commentCreator = await getMessageCreator(ctx, comment.userId);
+          
+          // Get the creator of the original post
+          let postCreator = null;
+          if (post) {
+            postCreator = await getMessageCreator(ctx, post.userId);
+            
+            // Check if the post creator has blocked the comment author
+            if (postCreator?.clerkId && currentUser.clerkId) {
+              const creatorBlockedUser = await ctx.db
+                .query('blockedUsers')
+                .withIndex('byBlockerAndBlocked', q => 
+                  q.eq('blockerId', postCreator!.clerkId).eq('blockedId', currentUser.clerkId)
+                )
+                .first();
+              
+              if (creatorBlockedUser) {
+                // Skip this comment if the post creator blocked the user
+                return null;
+              }
+            }
+          }
           
           return {
-            ...message,
-            mediaFiles: mediaUrls,
-            creator,
+            _id: comment._id,
+            _creationTime: comment._creationTime,
+            // Comment data
+            commentText: comment.commentText,
+            parentCommentId: comment.parentCommentId,
+            createdAt: comment.createdAt,
+            userId: comment.userId, // Include userId for ownership comparison
+            // Post data that the comment belongs to
+            postId: comment.postId,
+            postContent: post?.content || '',
+            postMediaFiles: post?.mediaFiles ? await getMediaUrls(ctx, post.mediaFiles) : [],
+            postIsPoll: post?.isPoll || false,
+            postPollQuestion: post?.pollQuestion || '',
+            postPollOptions: post?.pollOptions || [],
+            // Comment creator (the user who made the comment)
+            creator: commentCreator,
+            // Post creator (for showing "replied to @username")
+            postCreator: postCreator,
             isLiked: false,
           };
         })
     );
 
+    // Filter out null values (blocked comments)
+    const filteredReplies = repliesWithPost.filter(r => r !== null);
+
     return {
-      ...messages,
-      page: repliesWithCreator,
+      ...comments,
+      page: filteredReplies,
     };
   },
 });
@@ -856,16 +1072,9 @@ export const publishDraft = mutation({
       isDraft: false,
       isPosted: true,
     });
-    
-    // Update parent thread's comment count if this is a comment
-    if (draft.threadId) {
-      const parentThread = await ctx.db.get(draft.threadId);
-      if (parentThread) {
-        await ctx.db.patch(draft.threadId, {
-          commentCount: (parentThread.commentCount || 0) + 1,
-        });
-      }
-    }
+
+    // Note: Comment counts are now calculated dynamically from the comments table
+    // No need to update commentCount in messages table
 
     return { success: true };
   },
@@ -889,16 +1098,8 @@ export const deleteDraft = mutation({
       throw new Error('Not authorized to delete this draft');
     }
     
-    // If this draft is a comment (has threadId), decrement parent's comment count
-    if (draft.threadId) {
-      const parent = await ctx.db.get(draft.threadId);
-      if (parent) {
-        const newCommentCount = Math.max(0, (parent.commentCount || 1) - 1);
-        await ctx.db.patch(draft.threadId, {
-          commentCount: newCommentCount,
-        });
-      }
-    }
+    // Note: Comment counts are now calculated dynamically from the comments table
+    // No need to update commentCount in messages table
     
     await ctx.db.delete(args.draftId);
 
@@ -924,20 +1125,8 @@ export const deleteThread = mutation({
       throw new Error('Not authorized to delete this thread');
     }
     
-    // Check if this is a reply (has parent reference)
-    const parentId = thread.postId || thread.threadId || thread.parentId;
-    
-    // If this is a reply, decrement the parent's comment count
-    if (parentId) {
-      const parent = await ctx.db.get(parentId);
-      if (parent) {
-        // Ensure commentCount never goes below 0
-        const newCommentCount = Math.max(0, (parent.commentCount || 1) - 1);
-        await ctx.db.patch(parentId, {
-          commentCount: newCommentCount,
-        });
-      }
-    }
+    // Note: Comment counts are now calculated dynamically from the comments table
+    // No need to update commentCount in messages table
     
     await ctx.db.delete(args.threadId);
 
@@ -1075,15 +1264,8 @@ export const publishScheduledPost = mutation({
     });
     console.log(`[DEBUG] Successfully published post ${args.messageId}`);
 
-    // Update parent thread's comment count if this is a comment
-    if (message.threadId) {
-      const parentThread = await ctx.db.get(message.threadId);
-      if (parentThread) {
-        await ctx.db.patch(message.threadId, {
-          commentCount: (parentThread.commentCount || 0) + 1,
-        });
-      }
-    }
+    // Note: Comment counts are now calculated dynamically from the comments table
+    // No need to update commentCount in messages table
 
     return { success: true, duplicate: false };
   },
@@ -1112,16 +1294,8 @@ export const deleteScheduledPost = mutation({
       throw new Error('Can only delete scheduled posts');
     }
     
-    // If this scheduled post is a comment (has threadId), decrement parent's comment count
-    if (message.threadId) {
-      const parent = await ctx.db.get(message.threadId);
-      if (parent) {
-        const newCommentCount = Math.max(0, (parent.commentCount || 1) - 1);
-        await ctx.db.patch(message.threadId, {
-          commentCount: newCommentCount,
-        });
-      }
-    }
+    // Note: Comment counts are now calculated dynamically from the comments table
+    // No need to update commentCount in messages table
     
     await ctx.db.delete(args.messageId);
 
@@ -1420,11 +1594,40 @@ export const getSavedPosts = query({
           ))
           .first();
         
+        // Dynamically calculate likeCount from the likes table
+        const allLikes = await ctx.db
+          .query('likes')
+          .withIndex('byMessage', (q) => q.eq('messageId', message._id))
+          .collect();
+        const likeCount = allLikes.length;
+
+        // Check if current user is following this creator
+        let isFollowing = false;
+        if (creator && creator.clerkId && user.clerkId && creator.clerkId !== user.clerkId) {
+          const existingFollow = await ctx.db
+            .query('follows')
+            .withIndex('byFollowerAndFollowing', (q) => 
+              q.eq('followerId', user.clerkId!).eq('followingId', creator.clerkId!)
+            )
+            .first();
+          isFollowing = !!existingFollow;
+        }
+
+        // Dynamically calculate commentCount from comments table
+        const allComments = await ctx.db
+          .query('comments')
+          .withIndex('byPost', (q) => q.eq('postId', message._id))
+          .collect();
+        const actualCommentCount = allComments.filter(c => !c.parentCommentId).length;
+        
         threads.push({
           ...message,
           mediaFiles: mediaUrls, // Use converted URLs
           creator,
           isLiked: !!like,
+          isFollowing,
+          likeCount, // Use dynamically calculated count
+          commentCount: actualCommentCount,
           isSaved: true,
         });
       }
@@ -1490,11 +1693,40 @@ export const getLikedPosts = query({
         // Convert mediaFiles storage IDs to URLs
         const mediaUrls = await getMediaUrls(ctx, message.mediaFiles);
         
+        // Dynamically calculate likeCount from the likes table
+        const allLikes = await ctx.db
+          .query('likes')
+          .withIndex('byMessage', (q) => q.eq('messageId', message._id))
+          .collect();
+        const likeCount = allLikes.length;
+
+        // Check if current user is following this creator
+        let isFollowing = false;
+        if (creator && creator.clerkId && user.clerkId && creator.clerkId !== user.clerkId) {
+          const existingFollow = await ctx.db
+            .query('follows')
+            .withIndex('byFollowerAndFollowing', (q) => 
+              q.eq('followerId', user.clerkId!).eq('followingId', creator.clerkId!)
+            )
+            .first();
+          isFollowing = !!existingFollow;
+        }
+
+        // Dynamically calculate commentCount from comments table
+        const allComments = await ctx.db
+          .query('comments')
+          .withIndex('byPost', (q) => q.eq('postId', message._id))
+          .collect();
+        const actualCommentCount = allComments.filter(c => !c.parentCommentId).length;
+        
         threads.push({
           ...message,
           mediaFiles: mediaUrls, // Use converted URLs
           creator,
           isLiked: true,
+          isFollowing,
+          likeCount, // Use dynamically calculated count
+          commentCount: actualCommentCount,
           isSaved: false,
         });
       }
@@ -1537,6 +1769,56 @@ export const getSavedStatus = query({
 });
 
 
+// ============ COMMENT LIKES API ============
 
+// Toggle like/unlike on a comment
+export const toggleCommentLike = mutation({
+  args: {
+    commentId: v.id('comments'),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUserOrThrow(ctx);
+    
+    // Check if user already liked this comment
+    const existingLike = await ctx.db
+      .query('commentLikes')
+      .withIndex('byUserAndComment')
+      .filter((q) => 
+        q.and(
+          q.eq(q.field('userId'), user._id),
+          q.eq(q.field('commentId'), args.commentId)
+        )
+      )
+      .first();
 
+    if (existingLike) {
+      // Unlike - remove the like record
+      await ctx.db.delete(existingLike._id);
+      
+      // Decrement like count
+      const comment = await ctx.db.get(args.commentId);
+      if (comment && (comment.likeCount ?? 0) > 0) {
+        await ctx.db.patch(args.commentId, {
+          likeCount: (comment.likeCount ?? 0) - 1,
+        });
+      }
+      
+      return { action: 'unlike' };
+    } else {
+      // Like - add a like record
+      await ctx.db.insert('commentLikes', {
+        userId: user._id,
+        commentId: args.commentId,
+      });
+      
+      // Increment like count
+      const comment = await ctx.db.get(args.commentId);
+      await ctx.db.patch(args.commentId, {
+        likeCount: (comment?.likeCount || 0) + 1,
+      });
+
+      return { action: 'like' };
+    }
+  },
+});
 

@@ -43,9 +43,12 @@ const Thread = ({ thread, showMenu = false, onDelete, onLikeToggle }: ThreadProp
     const router = useRouter();
     const { userId: currentUserId } = useAuth();
     
-    const [isLiked, setIsLiked] = useState(initialIsLiked || false);
-    const [localLikeCount, setLocalLikeCount] = useState(likeCount ?? 0);
-    const [isSaved, setIsSaved] = useState(initialIsSaved || false);
+    // Use database-driven like state directly from the thread prop
+    // The query will automatically re-fetch after toggleLike mutation
+    const isLiked = thread.isLiked ?? false;
+    const displayLikeCount = thread.likeCount ?? 0;
+    // Use database-driven saved state directly from the thread prop
+    const isSaved = thread.isSaved ?? false;
     const [selectedImage, setSelectedImage] = useState<string | null>(null);
     const [showPostMenu, setShowPostMenu] = useState(false);
     const colors = useThemeColors();
@@ -93,14 +96,9 @@ const Thread = ({ thread, showMenu = false, onDelete, onLikeToggle }: ThreadProp
     };
 
     const handleLike = async () => {
-        const result = await toggleLike({ messageId: thread._id });
-        const nowUnliked = result?.action === 'unlike';
-        setIsLiked(!nowUnliked);
-        setLocalLikeCount(prev => nowUnliked ? prev - 1 : prev + 1);
-        // Notify parent if callback provided
-        if (onLikeToggle) {
-            onLikeToggle(!nowUnliked, thread._id);
-        }
+        // Call the mutation - query will automatically re-fetch after it completes
+        await toggleLike({ messageId: thread._id });
+        // No need to manually update state - the query will re-fetch and update the UI
     };
 
     const handleComment = () => {
@@ -156,7 +154,7 @@ const Thread = ({ thread, showMenu = false, onDelete, onLikeToggle }: ThreadProp
     const handleSave = async () => {
         try {
             await toggleSavePost({ messageId: thread._id });
-            setIsSaved(!isSaved);
+            // No need to manually update state - the query will re-fetch and update the UI
         } catch (error) {
             console.error('Error saving post:', error);
             Alert.alert('Error', 'Unable to save post. Please try again.');
@@ -395,6 +393,7 @@ const Thread = ({ thread, showMenu = false, onDelete, onLikeToggle }: ThreadProp
                             options={pollOptions}
                             votes={votes}
                             currentUserId={currentUserId || ''}
+                            selectedOption={userVote}
                             onVote={handleVote}
                             creator={{
                                 name: finalDisplayName,
@@ -440,7 +439,7 @@ const Thread = ({ thread, showMenu = false, onDelete, onLikeToggle }: ThreadProp
                                 />
                             </View>
                             <Text style={[styles.actionText, isLiked ? { color: '#FF3B30' } : { color: colors.icon }]}>
-                                {localLikeCount}
+                                {displayLikeCount}
                             </Text>
                         </TouchableOpacity>
 

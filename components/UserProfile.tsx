@@ -76,16 +76,15 @@ const UserProfile = ({ userId, isBlocked = false, iBlockedThem = false }: UserPr
   const followersCount = followCounts?.followersCount ?? 0;
   const followingCount = followCounts?.followingCount ?? 0;
   
-  // Query for follow request status (for private accounts)
-  const followRequestStatus = useQuery(
-    api.users.getFollowRequestStatus,
-    profile?.clerkId ? { targetClerkId: profile.clerkId } : 'skip'
-  );
+  // REMOVED: Query for follow request status
+  // const followRequestStatus = useQuery(
+  //   api.users.getFollowRequestStatus,
+  //   profile?.clerkId ? { targetClerkId: profile.clerkId } : 'skip'
+  // );
   
   // Mutation for follow/unfollow and follow requests
   const followUser = useMutation(api.users.followUser);
   const unfollowUser = useMutation(api.users.unfollowUser);
-  const sendFollowRequest = useMutation(api.users.sendFollowRequest);
   const unblockUser = useMutation(api.users.unblockUser);
   
   const handleFollowToggle = async () => {
@@ -94,14 +93,8 @@ const UserProfile = ({ userId, isBlocked = false, iBlockedThem = false }: UserPr
       if (isFollowing) {
         // Already following - unfollow
         await unfollowUser({ userId: profile.clerkId });
-      } else if (followRequestStatus?.status === 'pending') {
-        // Already sent request - do nothing
-        console.log('Follow request already pending');
-      } else if (profile.isPrivate) {
-        // Private account - send follow request
-        await sendFollowRequest({ targetClerkId: profile.clerkId });
       } else {
-        // Public account - follow directly
+        // Follow the user
         await followUser({ userId: profile.clerkId });
       }
       // State will automatically update from the query
@@ -134,7 +127,6 @@ const UserProfile = ({ userId, isBlocked = false, iBlockedThem = false }: UserPr
 
   // Determine button text based on state
   const getFollowButtonText = () => {
-    if (followRequestStatus?.status === 'pending') return 'Requested';
     if (isFollowing) return 'Following';
     return 'Follow';
   };

@@ -93,4 +93,50 @@ http.route({
   handler: handleProcessScheduled,
 });
 
+// Migration endpoint to fix old comments with 'text' instead of 'commentText'
+export const handleMigrateComments = httpAction(async (ctx, request) => {
+  try {
+    // First, migrate text to commentText
+    const allComments = await ctx.runQuery(api.messages._internalGetAllComments);
+    
+    let migratedCount = 0;
+    
+    for (const comment of allComments) {
+      // @ts-ignore - Handle old format with 'text' field
+      if (comment.text && !comment.commentText) {
+        // @ts-ignore
+        await ctx.runMutation(api.messages._internalMigrateComment, { 
+          commentId: comment._id,
+          // @ts-ignore
+          text: comment.text 
+        });
+        migratedCount++;
+      }
+    }
+    
+    return new Response(JSON.stringify({
+      success: true,
+      migrated: migratedCount,
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  } catch (error) {
+    console.error("Error migrating comments:", error);
+    return new Response(JSON.stringify({
+      success: false,
+      error: error instanceof Error ? error.message : "Unknown error",
+    }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+});
+
+http.route({
+  path: "/migrate-comments",
+  method: "POST",
+  handler: handleMigrateComments,
+});
+
 export default http;

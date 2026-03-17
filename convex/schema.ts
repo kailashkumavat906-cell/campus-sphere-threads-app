@@ -117,12 +117,20 @@ export const SearchHistory = {
   searchedAt: v.number(),
 };
 
-export const FollowRequest = {
-  fromClerkId: v.string(),
-  toClerkId: v.string(),
-  status: v.string(),
+
+
+export const Comment = {
+  postId: v.id('messages'), // Reference to the post being commented on
+  userId: v.id('users'),
+  commentText: v.string(),
+  parentCommentId: v.optional(v.id('comments')), // For nested replies
   createdAt: v.number(),
-  updatedAt: v.number(),
+  likeCount: v.optional(v.number()), // Number of likes on this comment
+};
+
+export const CommentLike = {
+  userId: v.id('users'),
+  commentId: v.id('comments'),
 };
 
 export default defineSchema({
@@ -154,5 +162,9 @@ export default defineSchema({
   searchHistory: defineTable(SearchHistory)
     .index('byUser', ['userId'])
     .index('byUserAndSearchedAt', ['userId', 'searchedAt']),
-  followRequests: defineTable(FollowRequest).index('byToAndStatus', ['toClerkId', 'status']),
+  comments: defineTable(Comment)
+    .index('byPost', ['postId'])
+    .index('byUser', ['userId'])
+    .index('byParentComment', ['parentCommentId']),
+  commentLikes: defineTable(CommentLike).index('byUserAndComment', ['userId', 'commentId']).index('byComment', ['commentId']).index('byUser', ['userId']),
 });

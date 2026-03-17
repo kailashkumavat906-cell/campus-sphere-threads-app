@@ -7,6 +7,7 @@ import { useMutation, useQuery } from 'convex/react';
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import { ActivityIndicator, Alert, FlatList, Image, Share, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import CommentItem from './CommentItem';
 
 type CommentComposerProps = {
     threadId: Id<'messages'>;
@@ -21,25 +22,21 @@ const CommentComposer: React.FC<CommentComposerProps> = ({ threadId, showThread 
     const [commentKey, setCommentKey] = useState(0); // Force refresh comments
     const { userProfile } = useUserProfile();
     const router = useRouter();
-    const addThread = useMutation(api.messages.addThread);
-    const toggleLike = useMutation(api.messages.toggleLike);
+    const addComment = useMutation(api.messages.addComment);
     const comments = useQuery(api.messages.getThreadComments, { messageId: threadId });
     const thread = useQuery(api.messages.getThreadById, { messageId: threadId });
     const colors = useThemeColors();
 
-    // Track local like states
-    const [likedComments, setLikedComments] = useState<Set<string>>(new Set());
-    const [likeCounts, setLikeCounts] = useState<Record<string, number>>({});
     const [showComments, setShowComments] = useState(initialShowComments);
 
     const handleSubmit = async () => {
         if (commentContent.trim() === '') return;
         
         try {
-            await addThread({
-                threadId: threadId as any,
-                content: commentContent,
-                parentId: replyingToId ? (replyingToId as Id<'messages'>) : undefined,
+            await addComment({
+                postId: threadId as any,
+                text: commentContent,
+                parentCommentId: replyingToId ? (replyingToId as Id<'comments'>) : undefined,
             });
             setCommentContent('');
             setReplyingToId(null);
@@ -49,31 +46,6 @@ const CommentComposer: React.FC<CommentComposerProps> = ({ threadId, showThread 
         } catch (error) {
             console.error('[CommentComposer] Error posting comment:', error);
             Alert.alert('Error', 'Failed to post comment. Please try again.');
-        }
-    };
-
-    const handleLike = async (commentId: string, currentLiked: boolean, currentCount: number) => {
-        try {
-            await toggleLike({ messageId: commentId as Id<'messages'> });
-            
-            // Update local state
-            setLikedComments(prev => {
-                const newSet = new Set(prev);
-                if (currentLiked) {
-                    newSet.delete(commentId);
-                } else {
-                    newSet.add(commentId);
-                }
-                return newSet;
-            });
-            
-            setLikeCounts(prev => ({
-                ...prev,
-                [commentId]: currentLiked ? currentCount - 1 : currentCount + 1
-            }));
-        } catch (error) {
-            console.error('Error toggling like:', error);
-            Alert.alert('Error', 'Unable to like comment. Please try again.');
         }
     };
 
@@ -112,62 +84,23 @@ const CommentComposer: React.FC<CommentComposerProps> = ({ threadId, showThread 
         );
     }
 
-    // Render a single comment (can be top-level or reply)
+    // Render a single comment using CommentItem component
+    // Each CommentItem manages its own like state independently
     const renderCommentItem = (item: any, isReply: boolean = false) => {
-        const isLiked = likedComments.has(item._id);
-        const displayCount = likeCounts[item._id] !== undefined 
-            ? likeCounts[item._id] 
-            : (item.likeCount || 0);
-        const username = `${item.creator?.first_name || ''} ${item.creator?.last_name || ''}`.trim() || 'User';
-
         return (
-            <View key={item._id} style={[styles.commentItem, isReply && styles.replyCommentItem]}>
-                <TouchableOpacity onPress={() => handleUserPress(item.creator?.clerkId)}>
-                    <Image
-                        source={{ uri: item.creator?.imageUrl || 'https://via.placeholder.com/40' }}
-                        style={[styles.commentAvatar, isReply && styles.replyAvatar]}
-                    />
-                </TouchableOpacity>
-                <View style={styles.commentContent}>
-                    <View style={styles.commentHeader}>
-                        <TouchableOpacity onPress={() => handleUserPress(item.creator?.clerkId)}>
-                            <Text style={[styles.commentUsername, { color: colors.text}]}>
-                                {username}
-                            </Text>
-                        </TouchableOpacity>
-                        <Text style={[styles.commentTime, { color: colors.icon }]}>
-                            · {new Date(item._creationTime).toLocaleDateString()}
-                        </Text>
-                    </View>
-                    <Text style={[styles.commentText, { color: colors.text }]}>{item.content}</Text>
-                    <View style={styles.commentActions}>
-                        {/* Like button */}
-                        <TouchableOpacity 
-                            style={styles.commentAction}
-                            onPress={() => handleLike(item._id, isLiked, displayCount)}
-                        >
-                            <Ionicons 
-                                name={isLiked ? "heart" : "heart-outline"} 
-                                size={16} 
-                                color={isLiked ? '#FF3B30' : colors.icon} 
-                            />
-                            {displayCount > 0 && (
-                                <Text style={[styles.actionCount, { color: isLiked ? '#FF3B30' : colors.icon }]}>
-                                    {displayCount}
-                                </Text>
-                            )}
-                        </TouchableOpacity>
-                        
-                        {/* Reply button */}
-                        <TouchableOpacity 
-                            style={styles.commentAction}
-                            onPress={() => handleReply(item._id, item.creator?.username || username)}
-                        >
-                            <Text style={[styles.replyText, { color: colors.icon }]}>Reply</Text>
-                        </TouchableOpacity>
-                    </View>
-                </View>
-            </View>
+            <CommentItem
+                comment={{
+                    _id: item._id,
+                    _creationTime: item._creationTime,
+                    text: item.text,
+                    creator: item.creator,
+                    likeCount: item.likeCount || 0,
+                    isLiked: item.isLiked ?? false,
+                }}
+                isReply={isReply}
+                onUserPress={handleUserPress}
+                onReply={handleReply}
+            />
         );
     };
 

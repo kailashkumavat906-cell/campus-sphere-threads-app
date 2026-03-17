@@ -17,6 +17,7 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Image,
   Share,
   StyleSheet,
   Text,
@@ -39,11 +40,14 @@ export default function Profile({ userId: propUserId, showBackButton = true }: P
   const [activeTab, setActiveTab] = useState<'Posts' | 'Replies' | 'Drafts'>('Posts');
   const [refreshKey, setRefreshKey] = useState(0);
   const [selectedDraft, setSelectedDraft] = useState<any>(null);
+  const [selectedReply, setSelectedReply] = useState<any>(null);
   
   // Mutation to delete a draft
   const deleteDraft = useMutation(api.messages.deleteDraft);
+  // Mutation to delete a comment/reply
+  const deleteComment = useMutation(api.messages.deleteComment);
   const { userProfile, syncUserToConvex, isSignedIn, userLoaded } = useUserProfile();
-  const { signOut } = useAuth();
+  const { signOut, userId: clerkUserId } = useAuth();
   const { colors, theme, setTheme } = useThemeContext();
   
   // Auto-sync user if not found in Convex
@@ -133,12 +137,6 @@ export default function Profile({ userId: propUserId, showBackButton = true }: P
 
   const isFollowing = profileFollowStatus?.isFollowing ?? false;
 
-  // Check follow request status for private accounts
-  const followRequestStatus = useQuery(
-    api.users.getFollowRequestStatus,
-    profileUser?.clerkId && !isOwnProfile && !isFollowing ? { targetClerkId: profileUser.clerkId } : 'skip'
-  );
-
   // Determine if we should show private account view
   // eslint-disable-next-line no-console
   console.log('[Profile] profileUser?.isPrivate:', profileUser?.isPrivate, 'isOwnProfile:', isOwnProfile, 'isFollowing:', isFollowing, 'profileUser?.clerkId:', profileUser?.clerkId, 'currentClerkId:', currentClerkId);
@@ -204,6 +202,17 @@ export default function Profile({ userId: propUserId, showBackButton = true }: P
   const handleEditDraft = (draftId: string) => {
     // Navigate to create page with draft ID to edit
     router.push({ pathname: '/(auth)/(modal)/create', params: { draftId } });
+  };
+
+  const handleDeleteReply = async (reply: any) => {
+    try {
+      await deleteComment({ commentId: reply._id });
+      // Force refresh to update the list after delete
+      setRefreshKey(prev => prev + 1);
+    } catch (error) {
+      console.error('Error deleting reply:', error);
+      Alert.alert('Error', 'Failed to delete reply. Please try again.');
+    }
   };
 
   const handleOpenDraftMenu = (draft: any) => {
@@ -381,7 +390,7 @@ export default function Profile({ userId: propUserId, showBackButton = true }: P
 
     items.push({ icon: 'notifications-outline', label: 'Notification Settings', onPress: () => router.push('/(auth)/(modal)/notification-settings') });
     items.push({ icon: 'lock-closed-outline', label: 'Privacy Settings', onPress: () => router.push('/(auth)/(modal)/privacy-settings') });
-    items.push({ icon: 'bookmark-outline', label: 'Saved Posts', onPress: () => router.push('/(auth)/(tabs)/favorites') });
+    items.push({ icon: 'bookmark-outline', label: 'Saved Posts', onPress: () => router.push({ pathname: '/(auth)/(tabs)/favorites', params: { initialTab: 'saved' } }) });
     items.push({ icon: 'share-outline', label: 'Share Profile', onPress: handleShareProfile });
 
     // 4. Support & Info
@@ -483,6 +492,79 @@ export default function Profile({ userId: propUserId, showBackButton = true }: P
                   </View>
                 </View>
               ) : (
+                // For Replies tab, render a custom reply card
+                activeTab === 'Replies' ? (
+                  <View style={styles.replyContainer}>
+                    {/* Original post */}
+                    <View style={styles.replyPostContainer}>
+                      <Text style={[styles.replyPostLabel, { color: colors.icon }]}>
+                        Replying to @{item.postCreator?.username || item.postCreator?.first_name || 'user'}
+                      </Text>
+                      <Text style={[styles.replyPostContent, { color: colors.text }]} numberOfLines={3}>
+                        {item.postContent || (item.postIsPoll ? item.postPollQuestion : '') || 'Post not available'}
+                      </Text>
+                      {item.postIsPoll && item.postPollOptions && (
+                        <View style={styles.replyPollOptions}>
+                          {item.postPollOptions.slice(0, 3).map((opt: string, idx: number) => (
+                            <Text key={idx} style={[styles.replyPollOption, { color: colors.icon }]}>
+                              • {opt}
+                            </Text>
+                          ))}
+                          {item.postPollOptions.length > 3 && (
+                            <Text style={[styles.replyPollMore, { color: colors.icon }]}>
+                              +{item.postPollOptions.length - 3} more
+                            </Text>
+                          )}
+                        </View>
+                      )}
+                    </View>
+                    {/* User's reply */}
+                    <View style={styles.replyContentContainer}>
+                      <View style={styles.replyHeader}>
+                        <Image
+                          source={{ uri: item.creator?.imageUrl || 'https://via.placeholder.com/40' }}
+                          style={styles.replyAvatar}
+                        />
+                        <View style={styles.replyHeaderText}>
+                          <Text style={[styles.replyDisplayName, { color: colors.text }]}>
+                            {item.creator?.first_name} {item.creator?.last_name}
+                          </Text>
+                          <Text style={[styles.replyUsername, { color: colors.icon }]}>
+                            @{item.creator?.username || item.creator?.first_name?.toLowerCase() || 'user'}
+                          </Text>
+                          <Text style={[styles.replyTimestamp, { color: colors.icon }]}>
+                            · {new Date(item.createdAt).toLocaleDateString()}
+                          </Text>
+                        </View>
+                        {/* Three-dot menu for delete - only show for own profile */}
+                        {isOwnProfile && (
+                          <TouchableOpacity
+                            onPress={() => {
+                              Alert.alert(
+                                'Delete Reply',
+                                'Are you sure you want to delete this reply?',
+                                [
+                                  { text: 'Cancel', style: 'cancel' },
+                                  {
+                                    text: 'Delete',
+                                    style: 'destructive',
+                                    onPress: () => handleDeleteReply(item),
+                                  },
+                                ]
+                              );
+                            }}
+                            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                          >
+                            <Ionicons name="ellipsis-horizontal" size={18} color={colors.icon} />
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                      <Text style={[styles.replyText, { color: colors.text }]}>
+                        {item.commentText}
+                      </Text>
+                    </View>
+                  </View>
+                ) : (
                 <Link href="/" asChild>
                   <TouchableOpacity>
                     <Thread 
@@ -495,7 +577,7 @@ export default function Profile({ userId: propUserId, showBackButton = true }: P
                     />
                   </TouchableOpacity>
                 </Link>
-              )}
+                ))}
               <View style={[styles.separator, { backgroundColor: colors.border }]} />
             </>
           );
@@ -731,5 +813,74 @@ const styles = StyleSheet.create({
   },
   loadingFooter: {
     padding: 20,
+  },
+  // Reply styles
+  replyContainer: {
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(0,0,0,0.1)',
+  },
+  replyPostContainer: {
+    backgroundColor: 'rgba(0,0,0,0.03)',
+    padding: 12,
+    borderRadius: 12,
+    marginBottom: 12,
+  },
+  replyPostLabel: {
+    fontSize: 13,
+    marginBottom: 4,
+  },
+  replyPostContent: {
+    fontSize: 15,
+    lineHeight: 22,
+  },
+  replyPollOptions: {
+    marginTop: 8,
+  },
+  replyPollOption: {
+    fontSize: 13,
+    marginTop: 2,
+  },
+  replyPollMore: {
+    fontSize: 12,
+    marginTop: 4,
+    fontStyle: 'italic',
+  },
+  replyContentContainer: {
+    paddingLeft: 0,
+  },
+  replyHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  replyAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    marginRight: 8,
+  },
+  replyHeaderText: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+  },
+  replyDisplayName: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginRight: 4,
+  },
+  replyUsername: {
+    fontSize: 14,
+    marginRight: 4,
+  },
+  replyTimestamp: {
+    fontSize: 14,
+  },
+  replyText: {
+    fontSize: 15,
+    lineHeight: 22,
+    paddingLeft: 40,
   },
 });

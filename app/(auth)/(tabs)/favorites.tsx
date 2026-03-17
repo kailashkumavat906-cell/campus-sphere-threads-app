@@ -2,13 +2,15 @@ import Thread from '@/components/Thread';
 import { api } from '@/convex/_generated/api';
 import { useThemeColors } from '@/hooks/useThemeColor';
 import { usePaginatedQuery } from 'convex/react';
+import { useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { FlatList, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 type TabType = 'saved' | 'liked';
 
 const Page = () => {
-    const [activeTab, setActiveTab] = useState<TabType>('saved');
+    const { initialTab } = useLocalSearchParams<{ initialTab?: TabType }>();
+    const [activeTab, setActiveTab] = useState<TabType>(initialTab || 'saved');
     const colors = useThemeColors();
     
     // State to hold filtered results

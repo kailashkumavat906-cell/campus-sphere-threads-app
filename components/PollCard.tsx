@@ -8,6 +8,9 @@ import {
     View,
 } from 'react-native';
 
+// Sky blue color for selected option (#38BDF8)
+const SKY_BLUE = '#38BDF8';
+
 type PollOption = {
     id: string;
     text: string;
@@ -24,6 +27,7 @@ type PollCardProps = {
     options: PollOption[];
     votes: Vote[];
     currentUserId: string;
+    selectedOption?: string | null; // Optional: pass directly from database query
     onVote: (optionId: string) => void;
     creator?: {
         name: string;
@@ -31,6 +35,7 @@ type PollCardProps = {
         avatar?: string;
     };
     timestamp?: string;
+    isMultipleChoice?: boolean;
 };
 
 export const PollCard = ({
@@ -38,15 +43,26 @@ export const PollCard = ({
     options,
     votes,
     currentUserId,
+    selectedOption: selectedOptionProp,
     onVote,
     creator,
     timestamp,
+    isMultipleChoice = false,
 }: PollCardProps) => {
     const { colors } = useThemeContext();
     
-    // Get current user's vote
-    const userVote = useMemo(() => {
-        return votes.find(v => v.userId === currentUserId)?.optionId || null;
+    // Use passed selectedOption if provided, otherwise compute from votes array
+    // The selectedOptionProp comes directly from the database query (userVote)
+    // which correctly uses the Convex user ID, avoiding Clerk ID mismatch
+    const selectedOption = selectedOptionProp !== undefined 
+        ? selectedOptionProp 
+        : useMemo(() => {
+            return votes.find(v => v.userId === currentUserId)?.optionId || null;
+        }, [votes, currentUserId]);
+    
+    // Get all user votes (for multiple choice)
+    const userVotes = useMemo(() => {
+        return votes.filter(v => v.userId === currentUserId).map(v => v.optionId);
     }, [votes, currentUserId]);
     
     // Calculate total votes
@@ -71,29 +87,46 @@ export const PollCard = ({
         return Math.round((count / totalVotes) * 100);
     };
     
-    // Animation refs
-    const containerFade = useRef(new Animated.Value(0)).current;
-    const containerSlide = useRef(new Animated.Value(20)).current;
+    // Animation refs for each option
+    const animatedWidths = useRef<Record<string, Animated.Value>>({});
     
-    // Initialize animations
+    // Initialize animations for each option
     useEffect(() => {
-        Animated.parallel([
-            Animated.timing(containerFade, {
-                toValue: 1,
-                duration: 400,
-                useNativeDriver: true,
-            }),
-            Animated.timing(containerSlide, {
-                toValue: 0,
-                duration: 400,
-                useNativeDriver: true,
-            }),
-        ]).start();
-    }, []);
+        options.forEach(option => {
+            if (!animatedWidths.current[option.id]) {
+                animatedWidths.current[option.id] = new Animated.Value(0);
+            }
+        });
+    }, [options]);
     
-    // Handle option press
+    // Animate progress bar when percentage changes
+    const animateProgressBar = (optionId: string, toValue: number) => {
+        if (!animatedWidths.current[optionId]) {
+            animatedWidths.current[optionId] = new Animated.Value(0);
+        }
+        Animated.timing(animatedWidths.current[optionId], {
+            toValue,
+            duration: 500,
+            useNativeDriver: false,
+        }).start();
+    };
+    
+    // Trigger animation when showing results
+    useEffect(() => {
+        if (totalVotes > 0) {
+            options.forEach(option => {
+                const percentage = getPercentage(option.id);
+                animateProgressBar(option.id, percentage);
+            });
+        }
+    }, [totalVotes, votes]);
+    
+    // Handle option press - toggle selection
     const handleOptionPress = (optionId: string) => {
         console.log('Option clicked:', optionId);
+        
+        // For voting, we just call the onVote callback
+        // The database will handle the vote state and return the updated value
         onVote(optionId);
     };
     
@@ -122,45 +155,49 @@ export const PollCard = ({
         },
         option: {
             borderColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.08)',
+            backgroundColor: isDark ? '#1E1E1E' : '#F5F8FA',
         },
         optionSelected: {
-            borderColor: colors.primary,
+            borderColor: SKY_BLUE,
+            backgroundColor: SKY_BLUE,
         },
         radioButton: {
-            borderColor: isDark ? '#444444' : '#CCCCCC',
+            borderColor: isDark ? '#555555' : '#99AAB5',
         },
         radioButtonSelected: {
-            borderColor: colors.primary,
+            borderColor: '#FFFFFF',
         },
         radioButtonInner: {
-            backgroundColor: colors.primary,
+            backgroundColor: '#FFFFFF',
         },
         optionText: {
             color: colors.text,
         },
+        optionTextSelected: {
+            color: '#FFFFFF',
+        },
         percentage: {
-            color: isDark ? '#AAAAAA' : '#666666',
+            color: isDark ? '#8899A6' : '#536471',
         },
         percentageSelected: {
-            color: colors.primary,
+            color: '#FFFFFF',
         },
         footer: {
             borderTopColor: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.05)',
         },
         voteCount: {
-            color: isDark ? '#666666' : '#999999',
+            color: isDark ? '#8899A6' : '#536471',
+        },
+        progressBar: {
+            backgroundColor: 'rgba(255, 255, 255, 0.25)',
         },
     };
     
     return (
-        <Animated.View
+        <View
             style={[
                 styles.container,
                 dynamicStyles.container,
-                {
-                    opacity: containerFade,
-                    transform: [{ translateY: containerSlide }],
-                },
             ]}
         >
             {/* Creator Info */}
@@ -202,7 +239,7 @@ export const PollCard = ({
             {/* Options */}
             <View style={styles.optionsContainer}>
                 {options.map((option) => {
-                    const isSelected = userVote === option.id;
+                    const isSelected = selectedOption === option.id;
                     const percentage = getPercentage(option.id);
                     const optionVotes = votesPerOption[option.id] || 0;
                     
@@ -211,11 +248,13 @@ export const PollCard = ({
                             key={option.id}
                             style={[
                                 styles.option,
-                                dynamicStyles.option,
-                                isSelected && dynamicStyles.optionSelected,
+                                {
+                                    backgroundColor: isSelected ? SKY_BLUE : (isDark ? '#1E1E1E' : '#F5F8FA'),
+                                    borderColor: isSelected ? SKY_BLUE : (isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.08)'),
+                                },
                             ]}
                             onPress={() => handleOptionPress(option.id)}
-                            activeOpacity={0.8}
+                            activeOpacity={0.7}
                         >
                             {/* Progress Bar Background */}
                             {showResults && (
@@ -224,12 +263,15 @@ export const PollCard = ({
                                     style={[
                                         styles.progressBar,
                                         {
-                                            width: `${percentage}%`,
+                                            width: animatedWidths.current[option.id] 
+                                                ? animatedWidths.current[option.id].interpolate({
+                                                    inputRange: [0, 100],
+                                                    outputRange: ['0%', '100%'],
+                                                })
+                                                : `${percentage}%`,
                                             backgroundColor: isSelected 
-                                                ? `${colors.primary}33` 
-                                                : isDark 
-                                                    ? 'rgba(255, 255, 255, 0.1)' 
-                                                    : 'rgba(0, 0, 0, 0.05)',
+                                                ? 'rgba(255, 255, 255, 0.3)' 
+                                                : 'rgba(255, 255, 255, 0.1)',
                                         },
                                     ]}
                                 />
@@ -238,23 +280,28 @@ export const PollCard = ({
                             {/* Option Content */}
                             <View style={styles.optionContent}>
                                 <View style={styles.optionLeft}>
-                                    {/* Radio Button Circle */}
+                                    {/* Radio Button Circle - Filled when selected, empty when not */}
                                     <View
                                         style={[
                                             styles.radioButton,
-                                            dynamicStyles.radioButton,
-                                            isSelected && dynamicStyles.radioButtonSelected,
+                                            {
+                                                borderColor: isSelected ? '#FFFFFF' : (isDark ? '#555555' : '#99AAB5'),
+                                                backgroundColor: isSelected ? '#FFFFFF' : 'transparent',
+                                            },
                                         ]}
                                     >
+                                        {/* Inner circle only shows when selected */}
                                         {isSelected && (
-                                            <View style={[styles.radioButtonInner, { backgroundColor: colors.primary }]} />
+                                            <View style={[styles.radioButtonInner, { backgroundColor: SKY_BLUE }]} />
                                         )}
                                     </View>
                                     <Text
                                         style={[
                                             styles.optionText,
-                                            dynamicStyles.optionText,
-                                            isSelected && styles.optionTextSelected,
+                                            {
+                                                color: isSelected ? '#FFFFFF' : colors.text,
+                                                fontWeight: isSelected ? '600' : '500',
+                                            },
                                         ]}
                                     >
                                         {option.text}
@@ -267,8 +314,10 @@ export const PollCard = ({
                                         <Text
                                             style={[
                                                 styles.percentage,
-                                                dynamicStyles.percentage,
-                                                isSelected && dynamicStyles.percentageSelected,
+                                                {
+                                                    color: isSelected ? '#FFFFFF' : (isDark ? '#8899A6' : '#536471'),
+                                                    fontWeight: isSelected ? '700' : '600',
+                                                },
                                             ]}
                                         >
                                             {percentage}%
@@ -285,11 +334,11 @@ export const PollCard = ({
             {showResults && (
                 <View style={[styles.footer, dynamicStyles.footer]}>
                     <Text style={[styles.voteCount, dynamicStyles.voteCount]}>
-                        {totalVotes} vote{totalVotes !== 1 ? 's' : ''}
+                        {totalVotes} vote{totalVotes !== 1 ? 's' : ''} • {totalVotes === 0 ? 'Be the first to vote' : isMultipleChoice ? 'Multiple choice' : 'Final results'}
                     </Text>
                 </View>
             )}
-        </Animated.View>
+        </View>
     );
 };
 
@@ -350,8 +399,7 @@ const styles = StyleSheet.create({
         position: 'relative',
         borderRadius: 16,
         overflow: 'hidden',
-        borderWidth: 1,
-        backgroundColor: 'transparent',
+        borderWidth: 1.5,
     },
     progressBar: {
         position: 'absolute',
@@ -365,6 +413,7 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'space-between',
         padding: 16,
+        paddingVertical: 14,
         position: 'relative',
         zIndex: 1,
     },
@@ -380,7 +429,7 @@ const styles = StyleSheet.create({
         borderWidth: 2,
         justifyContent: 'center',
         alignItems: 'center',
-        marginRight: 12,
+        marginRight: 14,
     },
     radioButtonInner: {
         width: 12,
@@ -393,14 +442,15 @@ const styles = StyleSheet.create({
         flex: 1,
     },
     optionTextSelected: {
-        fontWeight: '600',
+        fontWeight: '700',
+        color: '#FFFFFF',
     },
     percentageContainer: {
         minWidth: 50,
         alignItems: 'flex-end',
     },
     percentage: {
-        fontSize: 14,
+        fontSize: 15,
         fontWeight: '600',
     },
     footer: {
@@ -411,7 +461,7 @@ const styles = StyleSheet.create({
         borderTopWidth: 1,
     },
     voteCount: {
-        fontSize: 13,
+        fontSize: 14,
     },
 });
 

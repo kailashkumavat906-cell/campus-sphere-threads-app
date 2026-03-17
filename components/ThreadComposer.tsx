@@ -8,6 +8,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { Stack, useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import {
+    ActivityIndicator,
     Alert,
     Image,
     InputAccessoryView,
@@ -36,9 +37,11 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ isReply, threadId, draf
     const { userProfile } = useUserProfile();
     const inputAccessoryViewID = 'uniqueID';
     const addThread = useMutation(api.messages.addThread);
+    const addComment = useMutation(api.messages.addComment);
     const saveDraft = useMutation(api.messages.saveDraft);
     const deleteDraft = useMutation(api.messages.deleteDraft);
     const [mediaFiles, setMediaFiles] = useState<ImagePicker.ImagePickerAsset[]>([]);
+    const [isPosting, setIsPosting] = useState(false);
     const generateUploadUrl = useMutation(api.messages.generateUploadUrl);
     const colors = useThemeColors();
 
@@ -176,13 +179,23 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ isReply, threadId, draf
     };
 
     const uploadMediaFile = async (image: ImagePicker.ImagePickerAsset | null | undefined) => {
-        if (!image || !image.uri) {
+        // Safely handle undefined or null image
+        if (!image) {
+            console.log('uploadMediaFile: image is null/undefined');
+            return '';
+        }
+        
+        // Safely get the URI
+        const imageUri = image.uri;
+        if (!imageUri) {
+            console.log('uploadMediaFile: image.uri is undefined');
             return '';
         }
         
         try {
+            console.log('uploadMediaFile: starting upload for', imageUri);
             const postUrl = await generateUploadUrl();
-            const response = await fetch(image.uri);
+            const response = await fetch(imageUri);
             const blob = await response.blob();
             const mimeType = image.mimeType || 'image/jpeg';
             
@@ -193,44 +206,66 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ isReply, threadId, draf
             });
             
             if (!result.ok) {
+                console.log('uploadMediaFile: upload failed with status', result.status);
                 return '';
             }
             
             const data = await result.json();
-            return data.storageId || '';
-        } catch {
+            const storageId = data.storageId || '';
+            console.log('uploadMediaFile: got storageId', storageId);
+            return storageId;
+        } catch (error) {
+            console.error('uploadMediaFile: error', error);
             return '';
         }
     };
 
     const selectImage = async (source: 'camera' | 'library' | 'gif') => {
-        const options: ImagePicker.ImagePickerOptions = {
-            allowsEditing: true,
-            aspect: [4, 3],
-            mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        };
-
-        let result;
-
-        if (source === 'camera') {
-            const permission = await ImagePicker.requestCameraPermissionsAsync();
-            if (!permission.granted) {
-                Alert.alert('Permission needed', 'Camera permission is required to take photos.');
-                return;
-            }
-            result = await ImagePicker.launchCameraAsync(options);
-        } else if (source === 'gif') {
-            const gifOptions: ImagePicker.ImagePickerOptions = {
-                allowsEditing: false,
-                mediaTypes: ImagePicker.MediaTypeOptions.All,
+        try {
+            const options: ImagePicker.ImagePickerOptions = {
+                allowsEditing: true,
+                aspect: [4, 3],
+                mediaTypes: ImagePicker.MediaTypeOptions.Images,
             };
-            result = await ImagePicker.launchImageLibraryAsync(gifOptions);
-        } else {
-            result = await ImagePicker.launchImageLibraryAsync(options);
-        }
 
-        if (!result.canceled && result.assets && result.assets.length > 0) {
-            setMediaFiles([result.assets[0], ...mediaFiles]);
+            let result;
+
+            if (source === 'camera') {
+                const permission = await ImagePicker.requestCameraPermissionsAsync();
+                if (!permission.granted) {
+                    Alert.alert('Permission needed', 'Camera permission is required to take photos.');
+                    return;
+                }
+                result = await ImagePicker.launchCameraAsync(options);
+            } else if (source === 'gif') {
+                const gifOptions: ImagePicker.ImagePickerOptions = {
+                    allowsEditing: false,
+                    mediaTypes: ImagePicker.MediaTypeOptions.All,
+                };
+                result = await ImagePicker.launchImageLibraryAsync(gifOptions);
+            } else {
+                result = await ImagePicker.launchImageLibraryAsync(options);
+            }
+
+            // Safely check for result and assets
+            if (!result) return;
+            
+            // Check if user cancelled
+            if (result.canceled) return;
+            
+            // Check if assets exist and have items
+            const assets = result.assets;
+            if (!assets || !Array.isArray(assets) || assets.length === 0) return;
+            
+            // Safely get the first asset's URI
+            const firstAsset = assets[0];
+            if (!firstAsset || !firstAsset.uri) return;
+            
+            // Add the image to mediaFiles
+            setMediaFiles([firstAsset, ...mediaFiles]);
+        } catch (error) {
+            console.error('Error selecting image:', error);
+            Alert.alert('Error', 'Failed to select image. Please try again.');
         }
     };
 
@@ -247,7 +282,7 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ isReply, threadId, draf
                 text: 'Discard',
                 style: 'destructive',
                 onPress: () => {
-                    // Safe navigation for discard
+                    // Safe navigation - prefer going back
                     if (router.canGoBack()) {
                         router.back();
                     } else {
@@ -324,7 +359,7 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ isReply, threadId, draf
                         setMediaFiles([]);
                         setPollData(null);
                         setShowMenu(false);
-                        // Safe navigation
+                        // Safe navigation - prefer going back
                         if (router.canGoBack()) {
                             router.back();
                         } else {
@@ -336,13 +371,18 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ isReply, threadId, draf
         );
     };
 
-    const isPostButtonDisabled = threadContent.trim() === '' && mediaFiles.length === 0 && !pollData;
+    const isPostButtonDisabled = (threadContent.trim() === '' && mediaFiles.length === 0 && !pollData) || isPosting;
 
     const handleSubmit = async () => {
+        // Prevent multiple submissions
+        if (isPosting) return;
+        
         if (threadContent.trim() === '' && mediaFiles.length === 0 && !pollData) {
             return;
         }
 
+        setIsPosting(true);
+        
         try {
             const mediaStorageIds: string[] = [];
             
@@ -369,14 +409,23 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ isReply, threadId, draf
 
             console.log('Final mediaStorageIds to save:', mediaStorageIds);
 
-            await addThread({ 
-                threadId, 
-                content: threadContent, 
-                mediaFiles: mediaStorageIds.length > 0 ? mediaStorageIds : undefined,
-                isPoll: pollData ? true : undefined,
-                pollQuestion: pollData?.question,
-                pollOptions: pollData?.options,
-            });
+            // Use addComment for replies, addThread for new posts
+            if (threadId) {
+                // This is a comment/reply - use addComment mutation
+                await addComment({
+                    postId: threadId,
+                    text: threadContent,
+                });
+            } else {
+                // This is a new post - use addThread mutation
+                await addThread({ 
+                    content: threadContent, 
+                    mediaFiles: mediaStorageIds.length > 0 ? mediaStorageIds : undefined,
+                    isPoll: pollData ? true : undefined,
+                    pollQuestion: pollData?.question,
+                    pollOptions: pollData?.options,
+                });
+            }
 
             // Delete the draft if we're editing one
             if (draftId) {
@@ -402,6 +451,8 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ isReply, threadId, draf
         } catch (error) {
             console.error('Error posting thread:', error);
             Alert.alert('Error', 'Failed to post thread. Please try again.');
+        } finally {
+            setIsPosting(false);
         }
     };
 
@@ -676,7 +727,11 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ isReply, threadId, draf
                         style={[styles.postButton, isPostButtonDisabled && styles.postButtonDisabled]}
                         onPress={handleSubmit}
                         disabled={isPostButtonDisabled}>
-                        <Ionicons name="arrow-up" size={20} color={isPostButtonDisabled ? colors.icon : '#fff'} />
+                        {isPosting ? (
+                            <ActivityIndicator size="small" color="#fff" />
+                        ) : (
+                            <Ionicons name="arrow-up" size={20} color={isPostButtonDisabled ? colors.icon : '#fff'} />
+                        )}
                     </TouchableOpacity>
                 </View>
             </View>
@@ -691,7 +746,11 @@ const ThreadComposer: React.FC<ThreadComposerProps> = ({ isReply, threadId, draf
                             style={[styles.postButton, isPostButtonDisabled && styles.postButtonDisabled]}
                             onPress={handleSubmit}
                             disabled={isPostButtonDisabled}>
-                            <Ionicons name="arrow-up" size={20} color={isPostButtonDisabled ? colors.icon : '#fff'} />
+                            {isPosting ? (
+                                <ActivityIndicator size="small" color="#fff" />
+                            ) : (
+                                <Ionicons name="arrow-up" size={20} color={isPostButtonDisabled ? colors.icon : '#fff'} />
+                            )}
                         </TouchableOpacity>
                     </View>
                 </InputAccessoryView>
