@@ -1,5 +1,6 @@
 import { api } from '@/convex/_generated/api';
-import { useThemeColors } from '@/hooks/useThemeColor';
+import { Id } from '@/convex/_generated/dataModel';
+import { useThemeColor } from '@/hooks/use-theme-color';
 import { Ionicons } from '@expo/vector-icons';
 import { useMutation } from 'convex/react';
 import React, { useEffect, useState } from 'react';
@@ -31,7 +32,8 @@ const CommentItem: React.FC<CommentItemProps> = ({
     onUserPress,
     onReply,
 }) => {
-    const colors = useThemeColors();
+    const textColor = useThemeColor({}, 'text');
+    const iconColor = useThemeColor({}, 'icon');
     const toggleCommentLike = useMutation(api.messages.toggleCommentLike);
     
     // Each comment manages its own like state - initialize from comment data
@@ -57,7 +59,7 @@ const CommentItem: React.FC<CommentItemProps> = ({
         setLikeCount(prev => wasLiked ? prev - 1 : prev + 1);
         
         try {
-            await toggleCommentLike({ commentId: comment._id });
+            await toggleCommentLike({ commentId: comment._id as Id<'comments'> });
         } catch (error) {
             console.error('Error toggling like:', error);
             // Revert on error
@@ -88,15 +90,15 @@ const CommentItem: React.FC<CommentItemProps> = ({
                         onPress={() => onUserPress?.(comment.creator?.clerkId || '')}
                         disabled={!comment.creator?.clerkId}
                     >
-                        <Text style={[styles.commentUsername, { color: colors.text }]}>
+                        <Text style={[styles.commentUsername, { color: textColor }]}>
                             {username}
                         </Text>
                     </TouchableOpacity>
-                    <Text style={[styles.commentTime, { color: colors.icon }]}>
+                    <Text style={[styles.commentTime, { color: iconColor }]}>
                         · {new Date(comment._creationTime).toLocaleDateString()}
                     </Text>
                 </View>
-                <Text style={[styles.commentText, { color: colors.text }]}>
+                <Text style={[styles.commentText, { color: textColor }]}>
                     {comment.text}
                 </Text>
                 <View style={styles.commentActions}>
@@ -110,10 +112,10 @@ const CommentItem: React.FC<CommentItemProps> = ({
                         <Ionicons 
                             name={isLiked ? "heart" : "heart-outline"} 
                             size={16} 
-                            color={isLiked ? '#FF3B30' : colors.icon} 
+                            color={isLiked ? '#FF3B30' : iconColor} 
                         />
                         {likeCount > 0 && (
-                            <Text style={[styles.actionCount, { color: isLiked ? '#FF3B30' : colors.icon }]}>
+                            <Text style={[styles.actionCount, { color: isLiked ? '#FF3B30' : iconColor }]}>
                                 {likeCount}
                             </Text>
                         )}
@@ -124,7 +126,7 @@ const CommentItem: React.FC<CommentItemProps> = ({
                         style={styles.commentAction}
                         onPress={() => onReply?.(comment._id, displayUsername)}
                     >
-                        <Text style={[styles.replyText, { color: colors.icon }]}>Reply</Text>
+                        <Text style={[styles.replyText, { color: iconColor }]}>Reply</Text>
                     </TouchableOpacity>
                 </View>
             </View>

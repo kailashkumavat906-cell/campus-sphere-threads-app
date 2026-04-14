@@ -8,10 +8,12 @@
  * @module
  */
 
+import type * as admin from "../admin.js";
 import type * as auth from "../auth.js";
 import type * as http from "../http.js";
 import type * as messages from "../messages.js";
 import type * as notifications from "../notifications.js";
+import type * as reports from "../reports.js";
 import type * as sessions from "../sessions.js";
 import type * as users from "../users.js";
 
@@ -22,10 +24,12 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  admin: typeof admin;
   auth: typeof auth;
   http: typeof http;
   messages: typeof messages;
   notifications: typeof notifications;
+  reports: typeof reports;
   sessions: typeof sessions;
   users: typeof users;
 }>;

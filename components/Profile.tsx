@@ -18,11 +18,13 @@ import {
   Alert,
   FlatList,
   Image,
+  Modal,
   Share,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
-  View,
+  View
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import BottomSheetMenu from './BottomSheetMenu';
@@ -46,6 +48,14 @@ export default function Profile({ userId: propUserId, showBackButton = true }: P
   const deleteDraft = useMutation(api.messages.deleteDraft);
   // Mutation to delete a comment/reply
   const deleteComment = useMutation(api.messages.deleteComment);
+  // Mutation to create a report
+  const createReport = useMutation(api.reports.createReport);
+  // State for report modal
+  const [reportModalVisible, setReportModalVisible] = useState(false);
+  const [reportReason, setReportReason] = useState('');
+  const [reportMessage, setReportMessage] = useState('');
+  const [isSubmittingReport, setIsSubmittingReport] = useState(false);
+  
   const { userProfile, syncUserToConvex, isSignedIn, userLoaded } = useUserProfile();
   const { signOut, userId: clerkUserId } = useAuth();
   const { colors, theme, setTheme } = useThemeContext();
@@ -311,22 +321,62 @@ export default function Profile({ userId: propUserId, showBackButton = true }: P
     }
   };
 
-  // Handle report a problem - open email
+  // Handle report a problem - show modal and store in database
   const handleReportProblem = useCallback(async () => {
-    const email = 'kumavatkailash60@gmail.com';
-    const subject = 'Campus Sphere - Problem Report';
-    const body = `App: Campus Sphere\n\nUser Email: ${userProfile?.email || 'Not available'}\n\nMessage: Describe your issue here...`;
-    
-    const mailtoUrl = `mailto:${email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-    
-    const canOpen = await Linking.canOpenURL(mailtoUrl);
-    
-    if (canOpen) {
-      await Linking.openURL(mailtoUrl);
-    } else {
-      Alert.alert('Email app not found', 'Please install an email app to report problems.');
+    setReportModalVisible(true);
+  }, []);
+
+  // Submit the report
+  const handleSubmitReport = useCallback(async () => {
+    if (!reportReason.trim()) {
+      Alert.alert('Error', 'Please select a reason for reporting.');
+      return;
     }
-  }, [userProfile]);
+    
+    setIsSubmittingReport(true);
+    try {
+      // Submit to database
+      await createReport({
+        type: 'user',
+        targetId: clerkUserId || '',
+        reason: reportReason,
+        message: reportMessage,
+      });
+      
+      // Also open email for direct contact
+      const email = 'kumavatkailash60@gmail.com';
+      const subject = 'Campus Sphere - Problem Report';
+      const body = `App: Campus Sphere\n\nUser Email: ${userProfile?.email || 'Not available'}\nReason: ${reportReason}\n\nMessage: ${reportMessage || 'No additional message'}`;
+      
+      const mailtoUrl = `mailto:${email}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+      
+      setReportModalVisible(false);
+      setReportReason('');
+      setReportMessage('');
+      
+      Alert.alert('Report Submitted', 'Thank you for your report. We will review it shortly.');
+      
+      // Try to open email app (non-blocking)
+      const canOpen = await Linking.canOpenURL(mailtoUrl);
+      if (canOpen) {
+        await Linking.openURL(mailtoUrl);
+      }
+    } catch (error) {
+      console.error('Error submitting report:', error);
+      Alert.alert('Error', 'Failed to submit report. Please try again.');
+    } finally {
+      setIsSubmittingReport(false);
+    }
+  }, [reportReason, reportMessage, createReport, clerkUserId, userProfile]);
+
+  // Report reasons
+  const reportReasons = [
+    { id: 'spam', label: 'Spam or Misleading' },
+    { id: 'harassment', label: 'Harassment or Bullying' },
+    { id: 'inappropriate', label: 'Inappropriate Content' },
+    { id: 'fake', label: 'Fake Account' },
+    { id: 'other', label: 'Other' },
+  ];
 
   // Handle block/unblock user
   const handleBlockUser = useCallback(async () => {
@@ -709,6 +759,80 @@ export default function Profile({ userId: propUserId, showBackButton = true }: P
         onClose={() => setMenuVisible(false)}
         items={getMenuItems()}
       />
+
+      {/* Report Modal */}
+      <Modal
+        animationType="slide"
+        transparent={true}
+        visible={reportModalVisible}
+        onRequestClose={() => setReportModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { backgroundColor: colors.background }]}>
+            <View style={styles.modalHeader}>
+              <Text style={[styles.modalTitle, { color: colors.text }]}>Report a Problem</Text>
+              <TouchableOpacity onPress={() => setReportModalVisible(false)}>
+                <Ionicons name="close" size={24} color={colors.text} />
+              </TouchableOpacity>
+            </View>
+            
+            <Text style={[styles.modalLabel, { color: colors.text }]}>Reason for reporting:</Text>
+            <View style={styles.reasonContainer}>
+              {reportReasons.map((reason) => (
+                <TouchableOpacity
+                  key={reason.id}
+                  style={[
+                    styles.reasonButton,
+                    { borderColor: colors.border },
+                    reportReason === reason.id && { backgroundColor: colors.primary + '20', borderColor: colors.primary },
+                  ]}
+                  onPress={() => setReportReason(reason.id)}
+                >
+                  <Text
+                    style={[
+                      styles.reasonText,
+                      { color: colors.text },
+                      reportReason === reason.id && { color: colors.primary, fontWeight: '600' },
+                    ]}
+                  >
+                    {reason.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            
+            <Text style={[styles.modalLabel, { color: colors.text }]}>Additional details (optional):</Text>
+            <TextInput
+              style={[
+                styles.messageInput,
+                { backgroundColor: colors.authInputBackground, color: colors.text, borderColor: colors.border },
+              ]}
+              placeholder="Describe the issue..."
+              placeholderTextColor={colors.icon}
+              value={reportMessage}
+              onChangeText={setReportMessage}
+              multiline
+              numberOfLines={4}
+            />
+            
+            <TouchableOpacity
+              style={[
+                styles.submitButton,
+                { backgroundColor: colors.primary },
+                isSubmittingReport && styles.submitButtonDisabled,
+              ]}
+              onPress={handleSubmitReport}
+              disabled={isSubmittingReport}
+            >
+              {isSubmittingReport ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.submitButtonText}>Submit Report</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -882,5 +1006,70 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 22,
     paddingLeft: 40,
+  },
+  // Report Modal styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 20,
+    maxHeight: '80%',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+  },
+  modalLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 10,
+    marginTop: 10,
+  },
+  reasonContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 10,
+  },
+  reasonButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 20,
+    borderWidth: 1,
+  },
+  reasonText: {
+    fontSize: 14,
+  },
+  messageInput: {
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 12,
+    fontSize: 16,
+    minHeight: 100,
+    textAlignVertical: 'top',
+  },
+  submitButton: {
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginTop: 20,
+  },
+  submitButtonDisabled: {
+    opacity: 0.6,
+  },
+  submitButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
   },
 });

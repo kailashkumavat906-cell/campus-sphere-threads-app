@@ -30,6 +30,9 @@ export const User = {
   course: v.optional(v.string()),
   branch: v.optional(v.string()),
   semester: v.optional(v.string()),
+  // Admin fields
+  isAdmin: v.optional(v.boolean()),
+  isBanned: v.optional(v.boolean()),
 };
 
 export const Message = {
@@ -133,6 +136,17 @@ export const CommentLike = {
   commentId: v.id('comments'),
 };
 
+export const Report = {
+  reporterId: v.string(), // Clerk ID of the reporter
+  reporterEmail: v.string(),
+  targetId: v.string(), // Clerk ID of the reported user or message/comment ID
+  type: v.union(v.literal('user'), v.literal('post'), v.literal('comment')),
+  reason: v.string(),
+  message: v.string(),
+  createdAt: v.number(),
+  status: v.optional(v.union(v.literal('pending'), v.literal('resolved'), v.literal('dismissed'))),
+};
+
 export default defineSchema({
   users: defineTable(User).index('byClerkId', ['clerkId']).searchIndex('searchUsers', {
     searchField: 'username',
@@ -167,4 +181,5 @@ export default defineSchema({
     .index('byUser', ['userId'])
     .index('byParentComment', ['parentCommentId']),
   commentLikes: defineTable(CommentLike).index('byUserAndComment', ['userId', 'commentId']).index('byComment', ['commentId']).index('byUser', ['userId']),
+  reports: defineTable(Report).index('byReporter', ['reporterId']).index('byTarget', ['targetId']).index('byStatus', ['status']).index('byCreatedAt', ['createdAt']),
 });
