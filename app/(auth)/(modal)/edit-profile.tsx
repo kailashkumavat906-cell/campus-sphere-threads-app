@@ -14,7 +14,7 @@ import { useUser } from '@clerk/clerk-expo';
 import { useMutation, useQuery } from 'convex/react';
 import * as ImagePicker from 'expo-image-picker';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -45,18 +45,38 @@ export default function EditProfileModal() {
   );
 
   // Centralized profile data hook
-  const { profileData, saveProfileData, updateField } = useUserProfileData();
+  const { profileData, saveProfileData } = useUserProfileData();
 
-  // Local state for form fields
-  const [firstName, setFirstName] = useState('');
-  const [lastName, setLastName] = useState('');
-  const [username, setUsername] = useState('');
-  const [bio, setBio] = useState('');
-  const [website, setWebsite] = useState('');
+  // Centralized form state with useRef for persistence across remounts
+  const formRef = useRef({
+    firstName: '',
+    lastName: '',
+    username: '',
+    bio: '',
+    website: '',
+    college: '',
+    course: '',
+    branch: '',
+    semester: '',
+    avatar: null as string | null,
+  });
+  
+  const [form, setForm] = useState(formRef.current);
   const [imageUrl, setImageUrl] = useState<string | undefined>(undefined);
   const [pendingStorageId, setPendingStorageId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+
+  // Centralized update function - prevents stale closures
+  const updateForm = (key: keyof typeof formRef.current, value: string | null) => {
+    formRef.current = { ...formRef.current, [key]: value };
+    setForm(formRef.current);
+  };
+
+  // Debug form state changes
+  useEffect(() => {
+    console.log('FORM STATE:', form);
+  }, [form]);
 
   // Dropdown states
   const [showCollegeModal, setShowCollegeModal] = useState(false);
@@ -73,32 +93,27 @@ export default function EditProfileModal() {
     pendingStorageId ? { storageId: pendingStorageId } : 'skip'
   );
 
-  // Initialize form with user data when available
+  // Initialize form with user data when available - only runs once
   useEffect(() => {
     if (userData) {
-      // Set firstName and lastName from user data
-      setFirstName(userData.first_name || '');
-      setLastName(userData.last_name || '');
-      setUsername(userData.username || '');
-      setBio(userData.bio || '');
-      setWebsite(userData.websiteUrl || '');
+      // Set all form fields from user data
+      const initialForm = {
+        firstName: userData.first_name || '',
+        lastName: userData.last_name || '',
+        username: userData.username || '',
+        bio: userData.bio || '',
+        website: userData.websiteUrl || '',
+        college: userData.college || '',
+        course: userData.course || '',
+        branch: userData.branch || '',
+        semester: userData.semester || '',
+        avatar: null,
+      };
+      formRef.current = initialForm;
+      setForm(initialForm);
       setImageUrl(userData.imageUrl || undefined);
-      
-      // Initialize education fields if not already set
-      if (!profileData.college && userData.college) {
-        updateField('college', userData.college);
-      }
-      if (!profileData.course && userData.course) {
-        updateField('course', userData.course);
-      }
-      if (!profileData.branch && userData.branch) {
-        updateField('branch', userData.branch);
-      }
-      if (!profileData.semester && userData.semester) {
-        updateField('semester', userData.semester);
-      }
     }
-  }, [userData, profileData.college, profileData.course, profileData.branch, profileData.semester, updateField]);
+  }, [userData]);
 
   // Determine loading state
   const isLoadingData = !userId || isUserProfileLoading || (userData === undefined && userId);
@@ -145,6 +160,9 @@ export default function EditProfileModal() {
     if (!result.canceled && result.assets && result.assets[0]) {
       const asset = result.assets[0];
 
+      // Update avatar using centralized updateForm - does NOT reset other fields
+      updateForm('avatar', asset.uri);
+
       try {
         setIsLoading(true);
         const uploadUrl = await generateUploadUrl();
@@ -189,23 +207,23 @@ export default function EditProfileModal() {
       // Update first name, last name, username, bio, website, and education fields in Convex
       await updateUser({
         _id: userId as Id<'users'>,
-        first_name: firstName,
-        last_name: lastName,
-        username,
-        bio,
-        websiteUrl: website,
-        college: profileData.college,
-        course: profileData.course,
-        branch: profileData.branch,
-        semester: profileData.semester,
+        first_name: form.firstName,
+        last_name: form.lastName,
+        username: form.username,
+        bio: form.bio,
+        websiteUrl: form.website,
+        college: form.college,
+        course: form.course,
+        branch: form.branch,
+        semester: form.semester,
       });
 
       // Update Clerk profile if name changed
       if (clerkUser) {
         try {
           await clerkUser.update({
-            firstName: firstName,
-            lastName: lastName,
+            firstName: form.firstName,
+            lastName: form.lastName,
           });
         } catch (clerkError) {
           console.error('Failed to update Clerk profile:', clerkError);
@@ -225,10 +243,10 @@ export default function EditProfileModal() {
 
       // Save all profile data to AsyncStorage
       await saveProfileData({
-        college: profileData.college,
-        course: profileData.course,
-        branch: profileData.branch,
-        semester: profileData.semester,
+        college: form.college,
+        course: form.course,
+        branch: form.branch,
+        semester: form.semester,
       });
 
       router.back();
@@ -244,11 +262,7 @@ export default function EditProfileModal() {
     router.back();
   };
 
-  const handleSelectOption = (value: string, field: 'college' | 'course' | 'branch' | 'semester') => {
-    updateField(field, value);
-  };
-
-  const displayImageUrl = fileUrl || imageUrl;
+  const displayImageUrl = form.avatar || fileUrl || imageUrl;
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -301,8 +315,8 @@ export default function EditProfileModal() {
                 borderColor: colors.border,
               },
             ]}
-            value={firstName}
-            onChangeText={setFirstName}
+            value={form.firstName}
+            onChangeText={(text) => updateForm('firstName', text)}
             placeholder="Enter your first name"
             placeholderTextColor={colors.icon}
           />
@@ -320,8 +334,8 @@ export default function EditProfileModal() {
                 borderColor: colors.border,
               },
             ]}
-            value={lastName}
-            onChangeText={setLastName}
+            value={form.lastName}
+            onChangeText={(text) => updateForm('lastName', text)}
             placeholder="Enter your last name"
             placeholderTextColor={colors.icon}
           />
@@ -339,8 +353,8 @@ export default function EditProfileModal() {
                 borderColor: colors.border,
               },
             ]}
-            value={username}
-            onChangeText={setUsername}
+            value={form.username}
+            onChangeText={(text) => updateForm('username', text)}
             placeholder="Enter your username"
             placeholderTextColor={colors.icon}
             autoCapitalize="none"
@@ -360,8 +374,8 @@ export default function EditProfileModal() {
                 borderColor: colors.border,
               },
             ]}
-            value={bio}
-            onChangeText={setBio}
+            value={form.bio}
+            onChangeText={(text) => updateForm('bio', text)}
             placeholder="Tell us about yourself"
             placeholderTextColor={colors.icon}
             multiline
@@ -381,8 +395,8 @@ export default function EditProfileModal() {
                 borderColor: colors.border,
               },
             ]}
-            value={website}
-            onChangeText={setWebsite}
+            value={form.website}
+            onChangeText={(text) => updateForm('website', text)}
             placeholder="https://yourwebsite.com"
             placeholderTextColor={colors.icon}
             autoCapitalize="none"
@@ -402,8 +416,8 @@ export default function EditProfileModal() {
                   borderColor: colors.border,
                 },
               ]}
-              value={profileData.college}
-              onChangeText={(text) => handleSelectOption(text, 'college')}
+              value={form.college}
+              onChangeText={(text) => updateForm('college', text)}
               placeholder="Enter college name"
               placeholderTextColor={colors.icon}
             />
@@ -432,8 +446,8 @@ export default function EditProfileModal() {
                   borderColor: colors.border,
                 },
               ]}
-              value={profileData.course}
-              onChangeText={(text) => handleSelectOption(text, 'course')}
+              value={form.course}
+              onChangeText={(text) => updateForm('course', text)}
               placeholder="e.g., B.Tech, BBA, BCA"
               placeholderTextColor={colors.icon}
             />
@@ -462,8 +476,8 @@ export default function EditProfileModal() {
                   borderColor: colors.border,
                 },
               ]}
-              value={profileData.branch}
-              onChangeText={(text) => handleSelectOption(text, 'branch')}
+              value={form.branch}
+              onChangeText={(text) => updateForm('branch', text)}
               placeholder="e.g., Computer Engineering"
               placeholderTextColor={colors.icon}
             />
@@ -492,8 +506,8 @@ export default function EditProfileModal() {
                   borderColor: colors.border,
                 },
               ]}
-              value={profileData.semester}
-              onChangeText={(text) => handleSelectOption(text, 'semester')}
+              value={form.semester}
+              onChangeText={(text) => updateForm('semester', text)}
               placeholder="e.g., Semester 6"
               placeholderTextColor={colors.icon}
             />
@@ -516,9 +530,9 @@ export default function EditProfileModal() {
         onClose={() => setShowCollegeModal(false)}
         title="Select College"
         options={COLLEGE_OPTIONS}
-        selectedValue={profileData.college}
+        selectedValue={form.college}
         onSelect={(value) => {
-          handleSelectOption(value, 'college');
+          updateForm('college', value);
           setShowCollegeModal(false);
         }}
         colors={colors}
@@ -530,9 +544,9 @@ export default function EditProfileModal() {
         onClose={() => setShowCourseModal(false)}
         title="Select Course"
         options={COURSE_OPTIONS}
-        selectedValue={profileData.course}
+        selectedValue={form.course}
         onSelect={(value) => {
-          handleSelectOption(value, 'course');
+          updateForm('course', value);
           setShowCourseModal(false);
         }}
         colors={colors}
@@ -544,9 +558,9 @@ export default function EditProfileModal() {
         onClose={() => setShowBranchModal(false)}
         title="Select Branch"
         options={BRANCH_OPTIONS}
-        selectedValue={profileData.branch}
+        selectedValue={form.branch}
         onSelect={(value) => {
-          handleSelectOption(value, 'branch');
+          updateForm('branch', value);
           setShowBranchModal(false);
         }}
         colors={colors}
@@ -558,9 +572,9 @@ export default function EditProfileModal() {
         onClose={() => setShowSemesterModal(false)}
         title="Select Semester"
         options={SEMESTER_OPTIONS}
-        selectedValue={profileData.semester}
+        selectedValue={form.semester}
         onSelect={(value) => {
-          handleSelectOption(value, 'semester');
+          updateForm('semester', value);
           setShowSemesterModal(false);
         }}
         colors={colors}
